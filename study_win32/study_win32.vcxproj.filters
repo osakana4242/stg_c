@@ -29,11 +29,6 @@
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="study_win32.cpp">
-      <Filter>ソース ファイル</Filter>
-    </ClCompile>
-  </ItemGroup>
-  <ItemGroup>
     <ResourceCompile Include="study_win32.rc">
       <Filter>リソース ファイル</Filter>
     </ResourceCompile>
@@ -45,5 +40,10 @@
     <Image Include="study_win32.ico">
       <Filter>リソース ファイル</Filter>
     </Image>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="study_win32.c">
+      <Filter>ソース ファイル</Filter>
+    </ClCompile>
   </ItemGroup>
 </Project>

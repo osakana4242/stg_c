@@ -157,7 +157,7 @@
     <ClInclude Include="targetver.h" />
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="study_win32.cpp" />
+    <ClCompile Include="study_win32.c" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="study_win32.rc" />
