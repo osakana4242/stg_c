@@ -1,8 +1,9 @@
-﻿// study_win32.cpp : アプリケーションのエントリ ポイントを定義します。
-//
+﻿///
+
 
 #include "framework.h"
 #include "math.h"
+#include <assert.h>
 // #include "study_win32.h"
 
 #define MAX_LOADSTRING 100
@@ -12,15 +13,22 @@ HINSTANCE hInst;                                // 現在のインターフェ�
 TCHAR szTitle[MAX_LOADSTRING];                  // タイトル バーのテキスト
 TCHAR szWindowClass[MAX_LOADSTRING];            // メイン ウィンドウ クラス名
 
-#define ANGLE_PI 3.141592
+#define ANGLE_PI 3.141592f
 typedef float oskn_Angle;
 
+const float DEG_TO_RAD= ANGLE_PI / 180.0f;
+const float RAD_TO_DEG = 180.0f / ANGLE_PI;
+
 float oskn_Angle_toRad(oskn_Angle* self) {
-	return 2 * ANGLE_PI * (*self) / 360.0f;
+	return (*self) * DEG_TO_RAD;
 }
 
 float oskn_Angle_toDeg(oskn_Angle* self) {
 	return *self;
+}
+
+float oskn_AngleUtil_fromRad(float rad) {
+	return rad * RAD_TO_DEG;
 }
 
 typedef struct _oskn_Time {
@@ -40,18 +48,34 @@ typedef struct _oskn_Vec2 {
 	float y;
 } oskn_Vec2;
 
+void oskn_Vec2_init(oskn_Vec2* self, float x, float y) {
+	self->x = x;
+	self->y = y;
+}
+
 float oskn_Vec2_magnitude(oskn_Vec2* self) {
 	float sqr = self->x * self->x + self->y * self->y;
 	return sqrtf(sqr);
+}
+
+oskn_Angle oskn_Vec2_toAngle(oskn_Vec2* self) {
+	if (self->x == 0 && self->y == 0) return 0.0f;
+	float rad = atan2f(self->y, self->x);
+	return oskn_AngleUtil_fromRad( rad );
 }
 
 oskn_Vec2 oskn_Vec2Util_fromAngle(oskn_Angle angle) {
 	float rad = oskn_Angle_toRad(&angle);
 	oskn_Vec2 vec;
 	vec.x = cosf(rad);
-	vec.y = - sinf(rad);
+	vec.y = sinf(rad);
 	return vec;
 }
+
+BOOL oskn_Vec2Util_eq(oskn_Vec2* a, oskn_Vec2* b) {
+	return a->x == b->x && a->y == b->y;
+}
+
 
 typedef struct _oskn_Rect {
 	float x;
@@ -74,7 +98,7 @@ typedef enum _oskn_ObjType {
 } oskn_ObjType;
 
 typedef struct _oskn_Collider {
-	oskn_Rect rect;
+	float radius;
 } oskn_Collider;
 
 typedef struct _oskn_Player {
@@ -110,9 +134,12 @@ typedef struct _oskn_App {
 	int playerId;
 	float fps;
 	float frameInterval;
+	oskn_Vec2 screenSize;
+	oskn_Rect areaRect;
 	oskn_Time time;
 	HBITMAP hBitmap;
 	HDC     hdcMem;
+	
 } oskn_App;
 
 static oskn_App app_g;
@@ -121,7 +148,6 @@ BOOL oskn_ObjList_init(oskn_ObjList* self, int capacity) {
 	self->capacity = capacity;
 	self->totalList = calloc(self->capacity, sizeof(oskn_Obj));
 	self->activeList = calloc(self->capacity, sizeof(int));
-
 	for (int i = 1, iCount = self->capacity; i < iCount; ++i) {
 		oskn_Obj* item = &self->totalList[i];
 		item->destroyed = TRUE;
@@ -205,44 +231,103 @@ void oskn_ObjList_update(oskn_ObjList* self) {
 			vec.y *= speed;
 			obj->transform.position.x += vec.x;
 			obj->transform.position.y += vec.y;
+
+			float left = app_g.areaRect.x;
+			float top = app_g.areaRect.y;
+			float right = app_g.areaRect.x + app_g.areaRect.width;
+			float bottom = app_g.areaRect.y + app_g.areaRect.height;
+
+			if (right <= obj->transform.position.x + obj->collider.radius) {
+				vec.x *= -1;
+				obj->transform.position.x = right - obj->collider.radius;
+			} else if (obj->transform.position.x - obj->collider.radius < left) {
+				vec.x *= -1;
+				obj->transform.position.x = left + obj->collider.radius;
+			}
+
+			if (bottom <= obj->transform.position.y + obj->collider.radius) {
+				vec.y *= -1;
+				obj->transform.position.y = bottom - obj->collider.radius;
+			}
+			else if (obj->transform.position.y - obj->collider.radius < top) {
+				vec.y *= -1;
+				obj->transform.position.y = top + obj->collider.radius;
+			}
+			obj->transform.rotation = oskn_Vec2_toAngle(&vec);
 			break;
 		}
 		}
 	}
 }
 
-void oskn_App_update(oskn_App* self) {
-	oskn_Time_add(&self->time, self->frameInterval);
-	float spawnInterval = 0.05f;
-	INT32 prevSec = (INT32)((self->time.time - self->frameInterval)  / spawnInterval);
-	INT32 sec = (INT32)(self->time.time / spawnInterval);
 
-
-	float sc_w = 320;
-	float sc_h = 240;
-	if (1.0f < self->time.time && (prevSec < sec)) {
-		// spawn
-		float x = sc_w * rand() / RAND_MAX;
-		float y = sc_h * rand() / RAND_MAX;
-
-		oskn_Obj obj;
-		obj.type = oskn_ObjType_Enemy;
-		obj.transform.position.x = x;
-		obj.transform.position.y = y;
-//		obj.transform.rotation = 360.0f * rand() / RAND_MAX;
-		obj.transform.rotation = self->time.time * 10.0f;
-		obj.enemy.speed = 1000.0f * rand() / RAND_MAX;
-		oskn_ObjList_add(&app_g.objList, &obj);
-
-	}
-
-	oskn_ObjList_update(&self->objList);
-}
 
 BOOL oskn_App_init(oskn_App* self, HWND hWnd) {
+	{
+		oskn_Vec2 expected;
+		oskn_Vec2 actual;
+
+		oskn_Vec2_init(&expected, 1.0f, 0.0f);
+		actual = oskn_Vec2Util_fromAngle(0);
+		assert(oskn_Vec2Util_eq(&expected, &actual));
+
+		oskn_Vec2_init(&expected, 0.0f, 1.0f);
+		actual = oskn_Vec2Util_fromAngle(90);
+		actual.x = roundf(actual.x * 100) / 100;
+		actual.y = roundf(actual.y * 100) / 100;
+		assert(oskn_Vec2Util_eq(&expected, &actual));
+
+		oskn_Vec2_init(&expected, -1.0f, 0.0f);
+		actual = oskn_Vec2Util_fromAngle(180);
+		actual.x = roundf(actual.x * 100) / 100;
+		actual.y = roundf(actual.y * 100) / 100;
+		assert(oskn_Vec2Util_eq(&expected, &actual));
+
+		oskn_Vec2_init(&expected, 0.0f, -1.0f);
+		actual = oskn_Vec2Util_fromAngle(-90);
+		actual.x = roundf(actual.x * 100) / 100;
+		actual.y = roundf(actual.y * 100) / 100;
+		assert(oskn_Vec2Util_eq(&expected, &actual));
+	}
+	{
+		oskn_Vec2 vec;
+		oskn_Angle expected;
+		oskn_Angle actual;
+
+		expected = 0.0f;
+		oskn_Vec2_init(&vec, 1.0f, 0.0f);
+		actual = oskn_Vec2_toAngle(&vec);
+		actual = roundf(actual * 100) / 100;
+		assert(expected == actual);
+
+		expected = 90.0f;
+		oskn_Vec2_init(&vec, 0.0f, 1.0f);
+		actual = oskn_Vec2_toAngle(&vec);
+		actual = roundf(actual * 100) / 100;
+		assert(expected == actual);
+
+		expected = 180.0f;
+		oskn_Vec2_init(&vec, -1.0f, 0.0f);
+		actual = oskn_Vec2_toAngle(&vec);
+		actual = roundf(actual * 100) / 100;
+		assert(expected == actual);
+
+		expected = -90.0f;
+		oskn_Vec2_init(&vec, 0.0f, -1.0f);
+		actual = oskn_Vec2_toAngle(&vec);
+		actual = roundf(actual * 100) / 100;
+		assert(expected == actual);
+	}
+
 	oskn_ObjList_init(&self->objList, 65535);
+	self->screenSize.x = 320;
+	self->screenSize.y = 240;
 	self->fps = 60.0f;
 	self->frameInterval = 1.0f / self->fps;
+	self->areaRect.x = -16;
+	self->areaRect.y = -16;
+	self->areaRect.width = 320 + 32;
+	self->areaRect.height = 240 + 32;
 	HDC hdc;
 	RECT rc;
 	hdc = GetDC(hWnd);                      	// ウインドウのDCを取得
@@ -250,7 +335,6 @@ BOOL oskn_App_init(oskn_App* self, HWND hWnd) {
 	self->hBitmap = CreateCompatibleBitmap(hdc, rc.right, rc.bottom);
 	self->hdcMem = CreateCompatibleDC(NULL);		// カレントスクリーン互換
 	SelectObject(self->hdcMem, self->hBitmap);		// MDCにビットマップを割り付け
-
 
 	oskn_Obj obj;
 	obj.type = oskn_ObjType_Player;
@@ -261,6 +345,32 @@ BOOL oskn_App_init(oskn_App* self, HWND hWnd) {
 	return TRUE;
 }
 
+void oskn_App_update(oskn_App* self) {
+	oskn_Time_add(&self->time, self->frameInterval);
+	float spawnInterval = 0.5f;
+	INT32 prevSec = (INT32)((self->time.time - self->frameInterval)  / spawnInterval);
+	INT32 sec = (INT32)(self->time.time / spawnInterval);
+
+
+	if (1.0f < self->time.time && (prevSec < sec)) {
+		// spawn
+		float x = self->areaRect.x + self->areaRect.width * rand() / RAND_MAX;
+		float y = self->areaRect.y + self->areaRect.height * rand() / RAND_MAX;
+
+		oskn_Obj obj;
+		obj.type = oskn_ObjType_Enemy;
+		obj.transform.position.x = x;
+		obj.transform.position.y = y;
+		obj.collider.radius = 12.0f;
+//		obj.transform.rotation = 360.0f * rand() / RAND_MAX;
+		obj.transform.rotation = self->time.time * 10.0f;
+		obj.enemy.speed = 50.0f + 250.0f * rand() / RAND_MAX;
+		oskn_ObjList_add(&app_g.objList, &obj);
+
+	}
+
+	oskn_ObjList_update(&self->objList);
+}
 
 BOOL oskn_App_free(oskn_App* self) {
 	oskn_ObjList_free(&self->objList);
@@ -280,8 +390,6 @@ void draw(HWND hWnd) {
 	SelectObject(hdc, GetStockObject(BLACK_BRUSH));
 	Rectangle(hdc, rcClient.left, rcClient.top, rcClient.right, rcClient.bottom);
 	SelectObject(hdc, GetStockObject(WHITE_BRUSH));
-	wsprintf(str, TEXT("F %d T %d"), app_g.time.frameCount, (int)(app_g.time.time * 100));
-	TextOut(hdc, 10, 10, str, lstrlen(str));
 	for (int i = 0, iCount = app_g.objList.count; i < iCount; ++i) {
 		int id = app_g.objList.activeList[i];
 		oskn_Obj obj = *oskn_ObjList_get(&app_g.objList, id);
@@ -304,14 +412,17 @@ void draw(HWND hWnd) {
 			rgb = RGB(0xff, 0x00, 0xff);
 			break;
 		}
-		rc.left = (int)pt.x;
-		rc.top = (int)pt.y;
-		rc.right = rc.left + 32;
-		rc.bottom = rc.top + 32;
+		rc.left = (int)pt.x - 12;
+		rc.top = (int)pt.y - 12;
+		rc.right = rc.left + 24;
+		rc.bottom = rc.top + 24;
 		HBRUSH hBrash = CreateSolidBrush(rgb);
 		FillRect(hdc, &rc, hBrash);
 		DeleteObject(hBrash);
 	}
+
+	wsprintf(str, TEXT("F %d T %d"), app_g.time.frameCount, (int)(app_g.time.time * 100));
+	TextOut(hdc, 10, 10, str, lstrlen(str));
 }
 
 
@@ -343,7 +454,10 @@ LRESULT CALLBACK myWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
 		draw(hWnd);
 
 
-		BitBlt(hdc, 0, 0, rcClient.right, rcClient.bottom, app_g.hdcMem, 0, 0, SRCCOPY);
+		// BitBlt(hdc, 0, 0, rcClient.right, rcClient.bottom, app_g.hdcMem, 0, 0, SRCCOPY);
+		StretchBlt(
+			hdc, 0, 0, rcClient.right, rcClient.bottom,
+			app_g.hdcMem, 0, 0, (int)app_g.screenSize.x, (int)app_g.screenSize.y, SRCCOPY);
 		EndPaint(hWnd, &paint);
 		return 0;
 	}
@@ -417,7 +531,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 		(LPCTSTR)atom, szTitle,
 		WS_OVERLAPPEDWINDOW,
 		//100, 100, 640, 480,
-		CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
+		CW_USEDEFAULT, CW_USEDEFAULT, 320 * 3, 240 * 3,
 		NULL, NULL,
 		hInstance, NULL);
 
