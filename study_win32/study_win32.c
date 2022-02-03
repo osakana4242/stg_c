@@ -84,6 +84,25 @@ typedef struct _oskn_Rect {
 	float height;
 } oskn_Rect;
 
+void oskn_Rect_init(oskn_Rect* self, float x, float y, float width, float height) {
+	self->x = x;
+	self->y = y;
+	self->width = width;
+	self->height = height;
+}
+
+oskn_Vec2 oskn_Rect_min(oskn_Rect* self) {
+	oskn_Vec2 vec;
+	oskn_Vec2_init(&vec, self->x, self->y);
+	return vec;
+}
+
+oskn_Vec2 oskn_Rect_max(oskn_Rect* self) {
+	oskn_Vec2 vec;
+	oskn_Vec2_init(&vec, self->x + self->width, self->y + self->height);
+	return vec;
+}
+
 typedef struct _oskn_Transform {
 	oskn_Vec2 position;
 	oskn_Angle rotation;
@@ -231,28 +250,25 @@ void oskn_ObjList_update(oskn_ObjList* self) {
 			vec.y *= speed;
 			obj->transform.position.x += vec.x;
 			obj->transform.position.y += vec.y;
+			oskn_Vec2 rectMin = oskn_Rect_min(&app_g.areaRect);
+			oskn_Vec2 rectMax = oskn_Rect_max(&app_g.areaRect);
 
-			float left = app_g.areaRect.x;
-			float top = app_g.areaRect.y;
-			float right = app_g.areaRect.x + app_g.areaRect.width;
-			float bottom = app_g.areaRect.y + app_g.areaRect.height;
-
-			if (right <= obj->transform.position.x + obj->collider.radius) {
+			if (obj->transform.position.x - obj->collider.radius < rectMin.x) {
 				vec.x *= -1;
-				obj->transform.position.x = right - obj->collider.radius;
-			} else if (obj->transform.position.x - obj->collider.radius < left) {
+				obj->transform.position.x = rectMin.x + obj->collider.radius;
+			} else if (rectMax.x <= obj->transform.position.x + obj->collider.radius) {
 				vec.x *= -1;
-				obj->transform.position.x = left + obj->collider.radius;
+				obj->transform.position.x = rectMax.x - obj->collider.radius;
 			}
 
-			if (bottom <= obj->transform.position.y + obj->collider.radius) {
+			if (obj->transform.position.y - obj->collider.radius < rectMin.y) {
 				vec.y *= -1;
-				obj->transform.position.y = bottom - obj->collider.radius;
-			}
-			else if (obj->transform.position.y - obj->collider.radius < top) {
+				obj->transform.position.y = rectMin.y + obj->collider.radius;
+			} else if (rectMax.y <= obj->transform.position.y + obj->collider.radius) {
 				vec.y *= -1;
-				obj->transform.position.y = top + obj->collider.radius;
+				obj->transform.position.y = rectMax.y - obj->collider.radius;
 			}
+
 			obj->transform.rotation = oskn_Vec2_toAngle(&vec);
 			break;
 		}
