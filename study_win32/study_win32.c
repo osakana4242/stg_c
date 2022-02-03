@@ -1,10 +1,7 @@
-﻿///
-
-
-#include "framework.h"
+﻿
 #include "math.h"
-#include <assert.h>
-// #include "study_win32.h"
+#include "assert.h"
+#include "framework.h"
 
 #define MAX_LOADSTRING 100
 
@@ -18,6 +15,11 @@ typedef float oskn_Angle;
 
 const float DEG_TO_RAD= ANGLE_PI / 180.0f;
 const float RAD_TO_DEG = 180.0f / ANGLE_PI;
+
+BOOL oskn_Float_roundEq(float a, float b, float threshold) {
+	float d = a - b;
+	return -threshold <= d && d <= threshold;
+}
 
 float oskn_Angle_toRad(oskn_Angle* self) {
 	return (*self) * DEG_TO_RAD;
@@ -53,12 +55,23 @@ void oskn_Vec2_init(oskn_Vec2* self, float x, float y) {
 	self->y = y;
 }
 
-float oskn_Vec2_magnitude(oskn_Vec2* self) {
+BOOL oskn_Vec2_isZero(const oskn_Vec2* self) {
+	return self->x == 0.0f && self->y == 0.0f;
+}
+
+float oskn_Vec2_magnitude(const oskn_Vec2* self) {
 	float sqr = self->x * self->x + self->y * self->y;
 	return sqrtf(sqr);
 }
 
-oskn_Angle oskn_Vec2_toAngle(oskn_Vec2* self) {
+void oskn_Vec2_normalize(oskn_Vec2* self) {
+	if (self->x == 0 && self->y == 0) return;
+	float mag = oskn_Vec2_magnitude(self);
+	self->x /= mag;
+	self->y /= mag;
+}
+
+oskn_Angle oskn_Vec2_toAngle(const oskn_Vec2* self) {
 	if (self->x == 0 && self->y == 0) return 0.0f;
 	float rad = atan2f(self->y, self->x);
 	return oskn_AngleUtil_fromRad( rad );
@@ -76,6 +89,11 @@ BOOL oskn_Vec2Util_eq(oskn_Vec2* a, oskn_Vec2* b) {
 	return a->x == b->x && a->y == b->y;
 }
 
+BOOL oskn_Vec2Util_roundEq(const oskn_Vec2* a, const oskn_Vec2* b, float threshold) {
+	return
+		oskn_Float_roundEq(a->x, b->x, threshold) &&
+		oskn_Float_roundEq(a->y, b->y, threshold);
+}
 
 typedef struct _oskn_Rect {
 	float x;
@@ -91,15 +109,24 @@ void oskn_Rect_init(oskn_Rect* self, float x, float y, float width, float height
 	self->height = height;
 }
 
-oskn_Vec2 oskn_Rect_min(oskn_Rect* self) {
+oskn_Vec2 oskn_Rect_min(const oskn_Rect* self) {
 	oskn_Vec2 vec;
 	oskn_Vec2_init(&vec, self->x, self->y);
 	return vec;
 }
 
-oskn_Vec2 oskn_Rect_max(oskn_Rect* self) {
+oskn_Vec2 oskn_Rect_max(const oskn_Rect* self) {
 	oskn_Vec2 vec;
 	oskn_Vec2_init(&vec, self->x + self->width, self->y + self->height);
+	return vec;
+}
+
+oskn_Vec2 oskn_Rect_center(const oskn_Rect* self) {
+	oskn_Vec2 vec;
+	oskn_Vec2_init(&vec,
+		self->x + self->width * 0.5f,
+		self->y + self->height * 0.5f
+	);
 	return vec;
 }
 
@@ -148,6 +175,65 @@ typedef struct _oskn_ObjList {
 	int capacity;
 } oskn_ObjList;
 
+typedef enum _oskn_Key {
+	OSKN_KEY_NONE = 0,
+	OSKN_KEY_LEFT  = 1 << 0,
+	OSKN_KEY_RIGHT = 1 << 1,
+	OSKN_KEY_UP    = 1 << 2,
+	OSKN_KEY_DOWN  = 1 << 3,
+	OSKN_KEY_SHOT  = 1 << 4,
+	OSKN_KEY_FIX   = 1 << 5,
+} oskn_Key;
+
+typedef struct _oskn_Input {
+	INT32 keyStatePrev;
+	INT32 keyState;
+	INT32 keyStateNext;
+} oskn_Input;
+
+BOOL oskn_Input_hasKey(const oskn_Input* self, oskn_Key key) {
+	return 0 != (self->keyState & key);
+}
+
+BOOL oskn_Input_hasKeyDown(const oskn_Input* self, oskn_Key key) {
+	return
+		(0 == (self->keyStatePrev & key)) &&
+		(0 != (self->keyState & key));
+}
+
+BOOL oskn_Input_hasKeyUp(const oskn_Input* self, oskn_Key key) {
+	return
+		(0 != (self->keyStatePrev & key)) &&
+		(0 == (self->keyState & key));
+}
+
+oskn_Vec2 oskn_Input_getDirection(const oskn_Input* self) {
+	oskn_Vec2 vec;
+	oskn_Vec2_init(&vec, 0.0f, 0.0f);
+	if (oskn_Input_hasKey(self, OSKN_KEY_LEFT)) {
+		vec.x = -1.0f;
+	} else if (oskn_Input_hasKey(self, OSKN_KEY_RIGHT)) {
+		vec.x = 1.0f;
+	}
+
+	if (oskn_Input_hasKey(self, OSKN_KEY_UP)) {
+		vec.y = -1.0f;
+	} else if (oskn_Input_hasKey(self, OSKN_KEY_DOWN)) {
+		vec.y = 1.0f;
+	}
+
+	if (vec.x != 0.0f && vec.y != 0.0f) {
+		oskn_Vec2_normalize(&vec);
+	}
+
+	return vec;
+}
+
+void oskn_Input_update(oskn_Input* self) {
+	self->keyStatePrev = self->keyState;
+	self->keyState = self->keyStateNext;
+}
+
 typedef struct _oskn_App {
 	oskn_ObjList objList;
 	int playerId;
@@ -158,6 +244,7 @@ typedef struct _oskn_App {
 	oskn_Time time;
 	HBITMAP hBitmap;
 	HDC     hdcMem;
+	oskn_Input input;
 	
 } oskn_App;
 
@@ -236,11 +323,36 @@ void oskn_ObjList_update(oskn_ObjList* self) {
 
 		switch (obj->type) {
 		case oskn_ObjType_Player: {
-			oskn_Vec2 pos = obj->transform.position;
-			oskn_Vec2 tpos = obj->player.targetPosition;
-			pos.x += ( tpos.x - pos.x ) * 0.1f;
-			pos.y += ( tpos.y - pos.y ) * 0.1f;
-			obj->transform.position = pos;
+			oskn_Vec2 inputDir = oskn_Input_getDirection(&app_g.input);
+			if (!oskn_Vec2_isZero(&inputDir)) {
+				oskn_Vec2 pos = obj->transform.position;
+				oskn_Vec2 move;
+				float speed = 100.0f * app_g.time.deltaTime;
+				move.x = inputDir.x * speed;
+				move.y = inputDir.y * speed;
+				pos.x += move.x;
+				pos.y += move.y;
+
+
+				oskn_Vec2 rectMin = oskn_Rect_min(&app_g.areaRect);
+				oskn_Vec2 rectMax = oskn_Rect_max(&app_g.areaRect);
+				if (pos.x - obj->collider.radius < rectMin.x) {
+					pos.x = rectMin.x + obj->collider.radius;
+				}
+				else if (rectMax.x <= pos.x + obj->collider.radius) {
+					pos.x = rectMax.x - obj->collider.radius;
+				}
+
+				if (pos.y - obj->collider.radius < rectMin.y) {
+					pos.y = rectMin.y + obj->collider.radius;
+				}
+				else if (rectMax.y <= pos.y + obj->collider.radius) {
+					pos.y = rectMax.y - obj->collider.radius;
+				}
+
+
+				obj->transform.position = pos;
+			}
 			break;
 		}
 		case oskn_ObjType_Enemy: {
@@ -248,35 +360,34 @@ void oskn_ObjList_update(oskn_ObjList* self) {
 			float speed = obj->enemy.speed * app_g.time.deltaTime;
 			vec.x *= speed;
 			vec.y *= speed;
-			obj->transform.position.x += vec.x;
-			obj->transform.position.y += vec.y;
+			oskn_Vec2 pos = obj->transform.position;
+			pos.x += vec.x;
+			pos.y += vec.y;
 			oskn_Vec2 rectMin = oskn_Rect_min(&app_g.areaRect);
 			oskn_Vec2 rectMax = oskn_Rect_max(&app_g.areaRect);
 
-			if (obj->transform.position.x - obj->collider.radius < rectMin.x) {
+			if (pos.x - obj->collider.radius < rectMin.x) {
 				vec.x *= -1;
-				obj->transform.position.x = rectMin.x + obj->collider.radius;
-			} else if (rectMax.x <= obj->transform.position.x + obj->collider.radius) {
+				pos.x = rectMin.x + obj->collider.radius;
+			} else if (rectMax.x <= pos.x + obj->collider.radius) {
 				vec.x *= -1;
-				obj->transform.position.x = rectMax.x - obj->collider.radius;
+				pos.x = rectMax.x - obj->collider.radius;
 			}
 
-			if (obj->transform.position.y - obj->collider.radius < rectMin.y) {
+			if (pos.y - obj->collider.radius < rectMin.y) {
 				vec.y *= -1;
-				obj->transform.position.y = rectMin.y + obj->collider.radius;
-			} else if (rectMax.y <= obj->transform.position.y + obj->collider.radius) {
+				pos.y = rectMin.y + obj->collider.radius;
+			} else if (rectMax.y <= pos.y + obj->collider.radius) {
 				vec.y *= -1;
-				obj->transform.position.y = rectMax.y - obj->collider.radius;
+				pos.y = rectMax.y - obj->collider.radius;
 			}
-
+			obj->transform.position = pos;
 			obj->transform.rotation = oskn_Vec2_toAngle(&vec);
 			break;
 		}
 		}
 	}
 }
-
-
 
 BOOL oskn_App_init(oskn_App* self, HWND hWnd) {
 	{
@@ -289,21 +400,15 @@ BOOL oskn_App_init(oskn_App* self, HWND hWnd) {
 
 		oskn_Vec2_init(&expected, 0.0f, 1.0f);
 		actual = oskn_Vec2Util_fromAngle(90);
-		actual.x = roundf(actual.x * 100) / 100;
-		actual.y = roundf(actual.y * 100) / 100;
-		assert(oskn_Vec2Util_eq(&expected, &actual));
+		assert(oskn_Vec2Util_roundEq(&expected, &actual, 0.01f));
 
 		oskn_Vec2_init(&expected, -1.0f, 0.0f);
 		actual = oskn_Vec2Util_fromAngle(180);
-		actual.x = roundf(actual.x * 100) / 100;
-		actual.y = roundf(actual.y * 100) / 100;
-		assert(oskn_Vec2Util_eq(&expected, &actual));
+		assert(oskn_Vec2Util_roundEq(&expected, &actual, 0.01f));
 
 		oskn_Vec2_init(&expected, 0.0f, -1.0f);
 		actual = oskn_Vec2Util_fromAngle(-90);
-		actual.x = roundf(actual.x * 100) / 100;
-		actual.y = roundf(actual.y * 100) / 100;
-		assert(oskn_Vec2Util_eq(&expected, &actual));
+		assert(oskn_Vec2Util_roundEq(&expected, &actual, 0.01f));
 	}
 	{
 		oskn_Vec2 vec;
@@ -313,37 +418,33 @@ BOOL oskn_App_init(oskn_App* self, HWND hWnd) {
 		expected = 0.0f;
 		oskn_Vec2_init(&vec, 1.0f, 0.0f);
 		actual = oskn_Vec2_toAngle(&vec);
-		actual = roundf(actual * 100) / 100;
-		assert(expected == actual);
+		assert(oskn_Float_roundEq(expected, actual, 0.01f));
 
 		expected = 90.0f;
 		oskn_Vec2_init(&vec, 0.0f, 1.0f);
 		actual = oskn_Vec2_toAngle(&vec);
-		actual = roundf(actual * 100) / 100;
-		assert(expected == actual);
+		assert(oskn_Float_roundEq(expected, actual, 0.01f));
 
 		expected = 180.0f;
 		oskn_Vec2_init(&vec, -1.0f, 0.0f);
 		actual = oskn_Vec2_toAngle(&vec);
-		actual = roundf(actual * 100) / 100;
-		assert(expected == actual);
+		assert(oskn_Float_roundEq(expected, actual, 0.01f));
 
 		expected = -90.0f;
 		oskn_Vec2_init(&vec, 0.0f, -1.0f);
 		actual = oskn_Vec2_toAngle(&vec);
-		actual = roundf(actual * 100) / 100;
-		assert(expected == actual);
+		assert(oskn_Float_roundEq(expected, actual, 0.01f));
 	}
 
-	oskn_ObjList_init(&self->objList, 65535);
+	oskn_ObjList_init(&self->objList, 255);
 	self->screenSize.x = 320;
 	self->screenSize.y = 240;
 	self->fps = 60.0f;
 	self->frameInterval = 1.0f / self->fps;
-	self->areaRect.x = -16;
-	self->areaRect.y = -16;
-	self->areaRect.width = 320 + 32;
-	self->areaRect.height = 240 + 32;
+	self->areaRect.x = -8;
+	self->areaRect.y = -8;
+	self->areaRect.width = 320 + 16;
+	self->areaRect.height = 240 + 16;
 	HDC hdc;
 	RECT rc;
 	hdc = GetDC(hWnd);                      	// ウインドウのDCを取得
@@ -352,10 +453,12 @@ BOOL oskn_App_init(oskn_App* self, HWND hWnd) {
 	self->hdcMem = CreateCompatibleDC(NULL);		// カレントスクリーン互換
 	SelectObject(self->hdcMem, self->hBitmap);		// MDCにビットマップを割り付け
 
+	oskn_Vec2 areaCenter = oskn_Rect_center(&self->areaRect);
 	oskn_Obj obj;
 	obj.type = oskn_ObjType_Player;
-	obj.transform.position.x = 0;
-	obj.transform.position.y = 0;
+	obj.collider.radius = 12.0f;
+	obj.transform.position.x = areaCenter.x;
+	obj.transform.position.y = areaCenter.y;
 	self->playerId = oskn_ObjList_add(&app_g.objList, &obj);
 
 	return TRUE;
@@ -363,26 +466,31 @@ BOOL oskn_App_init(oskn_App* self, HWND hWnd) {
 
 void oskn_App_update(oskn_App* self) {
 	oskn_Time_add(&self->time, self->frameInterval);
-	float spawnInterval = 0.5f;
-	INT32 prevSec = (INT32)((self->time.time - self->frameInterval)  / spawnInterval);
-	INT32 sec = (INT32)(self->time.time / spawnInterval);
+	oskn_Input_update(&self->input);
+
+	// 岩石の生成.
+	{
+		float spawnInterval = 1.0f;
+		INT32 prevSec = (INT32)((self->time.time - self->frameInterval) / spawnInterval);
+		INT32 sec = (INT32)(self->time.time / spawnInterval);
 
 
-	if (1.0f < self->time.time && (prevSec < sec)) {
-		// spawn
-		float x = self->areaRect.x + self->areaRect.width * rand() / RAND_MAX;
-		float y = self->areaRect.y + self->areaRect.height * rand() / RAND_MAX;
+		if (1.0f < self->time.time && (prevSec < sec)) {
+			// spawn
+			float x = self->areaRect.x + self->areaRect.width * rand() / RAND_MAX;
+			float y = self->areaRect.y + self->areaRect.height * rand() / RAND_MAX;
 
-		oskn_Obj obj;
-		obj.type = oskn_ObjType_Enemy;
-		obj.transform.position.x = x;
-		obj.transform.position.y = y;
-		obj.collider.radius = 12.0f;
-//		obj.transform.rotation = 360.0f * rand() / RAND_MAX;
-		obj.transform.rotation = self->time.time * 10.0f;
-		obj.enemy.speed = 50.0f + 250.0f * rand() / RAND_MAX;
-		oskn_ObjList_add(&app_g.objList, &obj);
+			oskn_Obj obj;
+			obj.type = oskn_ObjType_Enemy;
+			obj.transform.position.x = x;
+			obj.transform.position.y = y;
+			obj.collider.radius = 12.0f;
+			//		obj.transform.rotation = 360.0f * rand() / RAND_MAX;
+			obj.transform.rotation = self->time.time * 10.0f;
+			obj.enemy.speed = 25.0f + 75.0f * rand() / RAND_MAX;
+			oskn_ObjList_add(&app_g.objList, &obj);
 
+		}
 	}
 
 	oskn_ObjList_update(&self->objList);
@@ -441,6 +549,22 @@ void draw(HWND hWnd) {
 	TextOut(hdc, 10, 10, str, lstrlen(str));
 }
 
+oskn_Key oskn_KeyUtil_fromWParam(WPARAM wParam) {
+	switch (wParam) {
+	case VK_LEFT:     return OSKN_KEY_LEFT;
+	case 'A':         return OSKN_KEY_LEFT;
+	case VK_RIGHT:    return OSKN_KEY_RIGHT;
+	case 'D':         return OSKN_KEY_RIGHT;
+	case VK_UP:       return OSKN_KEY_UP;
+	case 'W':         return OSKN_KEY_UP;
+	case VK_DOWN:     return OSKN_KEY_DOWN;
+	case 'S':         return OSKN_KEY_DOWN;
+	case VK_SHIFT:    return OSKN_KEY_FIX;
+	case VK_RETURN:   return OSKN_KEY_SHOT;
+	case VK_SPACE:    return OSKN_KEY_SHOT;
+	default:          return OSKN_KEY_NONE;
+	}
+}
 
 LRESULT CALLBACK myWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
 #ifdef _DEBUG
@@ -450,7 +574,6 @@ LRESULT CALLBACK myWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
 #endif
 	LPCTSTR lptStr = TEXT("ほげら");
 	HDC hdc;
-	POINT pt;
 	PAINTSTRUCT paint;
 
 	switch (uMsg) {
@@ -477,12 +600,26 @@ LRESULT CALLBACK myWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
 		EndPaint(hWnd, &paint);
 		return 0;
 	}
+	case WM_KEYDOWN: {
+		oskn_Key key = oskn_KeyUtil_fromWParam(wParam);
+		if (key != OSKN_KEY_NONE) {
+			app_g.input.keyStateNext |= key;
+		}
+		return 0;
+	}
+	case WM_KEYUP: {
+		oskn_Key key = oskn_KeyUtil_fromWParam(wParam);
+		if (key != OSKN_KEY_NONE) {
+			app_g.input.keyStateNext &= ~key;
+		}
+		return 0;
+	}
 	case WM_MOUSEMOVE: {
-		pt.x = LOWORD(lParam);
-		pt.y = HIWORD(lParam);
-		oskn_Obj* player = oskn_ObjList_get(&app_g.objList, app_g.playerId);
-		player->player.targetPosition.x = (float)pt.x;
-		player->player.targetPosition.y = (float)pt.y;
+		//pt.x = LOWORD(lParam);
+		//pt.y = HIWORD(lParam);
+		//oskn_Obj* player = oskn_ObjList_get(&app_g.objList, app_g.playerId);
+		//player->player.targetPosition.x = (float)pt.x;
+		//player->player.targetPosition.y = (float)pt.y;
 		break;
 	}
 	case WM_LBUTTONDOWN: {
