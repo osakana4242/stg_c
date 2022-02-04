@@ -9,6 +9,7 @@
 
 // C ランタイム ヘッダー ファイル
 #include <stdlib.h>
+#include <stdbool.h>
 #include <malloc.h>
 #include <memory.h>
 #include <tchar.h>
@@ -28,7 +29,8 @@ typedef float oskn_Angle;
 const float DEG_TO_RAD= ANGLE_PI / 180.0f;
 const float RAD_TO_DEG = 180.0f / ANGLE_PI;
 
-BOOL oskn_Float_roundEq(float a, float b, float threshold) {
+bool oskn_Float_roundEq(float a, float b, float threshold) {
+	BOOL ho;
 	float d = a - b;
 	return -threshold <= d && d <= threshold;
 }
@@ -51,7 +53,7 @@ typedef struct _oskn_Time {
 	float deltaTime;
 } oskn_Time;
 
-void oskn_Time_add( oskn_Time* self, float deltaTime) {
+void oskn_Time_add(oskn_Time* self, float deltaTime) {
 	self->time += deltaTime;
 	self->deltaTime = deltaTime;
 	++self->frameCount;
@@ -67,13 +69,16 @@ void oskn_Vec2_init(oskn_Vec2* self, float x, float y) {
 	self->y = y;
 }
 
-BOOL oskn_Vec2_isZero(const oskn_Vec2* self) {
+bool oskn_Vec2_isZero(const oskn_Vec2* self) {
 	return self->x == 0.0f && self->y == 0.0f;
 }
 
+ float oskn_Vec2_sqrMagnitude(const oskn_Vec2* self) {
+	return self->x * self->x + self->y * self->y;
+}
+
 float oskn_Vec2_magnitude(const oskn_Vec2* self) {
-	float sqr = self->x * self->x + self->y * self->y;
-	return sqrtf(sqr);
+	return sqrtf(oskn_Vec2_sqrMagnitude(self));
 }
 
 void oskn_Vec2_normalize(oskn_Vec2* self) {
@@ -97,11 +102,11 @@ oskn_Vec2 oskn_Vec2Util_fromAngle(oskn_Angle angle) {
 	return vec;
 }
 
-BOOL oskn_Vec2Util_eq(oskn_Vec2* a, oskn_Vec2* b) {
+bool oskn_Vec2Util_eq(const oskn_Vec2* a, const oskn_Vec2* b) {
 	return a->x == b->x && a->y == b->y;
 }
 
-BOOL oskn_Vec2Util_roundEq(const oskn_Vec2* a, const oskn_Vec2* b, float threshold) {
+bool oskn_Vec2Util_roundEq(const oskn_Vec2* a, const oskn_Vec2* b, float threshold) {
 	return
 		oskn_Float_roundEq(a->x, b->x, threshold) &&
 		oskn_Float_roundEq(a->y, b->y, threshold);
@@ -161,22 +166,37 @@ typedef struct _oskn_Collider {
 
 typedef struct _oskn_Player {
 	oskn_Vec2 targetPosition;
+	float shotInterval;
+	float shotStartTime;
 } oskn_Player;
 
+typedef struct _oskn_Bullet {
+	float damage;
+	float speed;
+} oskn_Bullet;
+
 typedef struct _oskn_Enemy {
-	INT32 hoge;
+	float hp;
 	float speed;
 } oskn_Enemy;
 
+
 typedef struct _oskn_Obj {
-	BOOL destroyed;
+	bool destroyed;
+	/// <summary>この時間に達していたら remove する. 0 以下は無効.</summary>
+	float destroyTime;
+	INT32 id;
 	LPCWSTR name;
 	float spawnedTime;
+
 	oskn_ObjType type;
 	oskn_Transform transform;
 	oskn_Collider collider;
 	oskn_Player player;
+	oskn_Bullet bullet;
 	oskn_Enemy enemy;
+
+	void(*onHit)(struct _oskn_Obj* self, struct _oskn_Obj* other);
 } oskn_Obj;
 
 
@@ -203,17 +223,17 @@ typedef struct _oskn_Input {
 	INT32 keyStateNext;
 } oskn_Input;
 
-BOOL oskn_Input_hasKey(const oskn_Input* self, oskn_Key key) {
+bool oskn_Input_hasKey(const oskn_Input* self, oskn_Key key) {
 	return 0 != (self->keyState & key);
 }
 
-BOOL oskn_Input_hasKeyDown(const oskn_Input* self, oskn_Key key) {
+bool oskn_Input_hasKeyDown(const oskn_Input* self, oskn_Key key) {
 	return
 		(0 == (self->keyStatePrev & key)) &&
 		(0 != (self->keyState & key));
 }
 
-BOOL oskn_Input_hasKeyUp(const oskn_Input* self, oskn_Key key) {
+bool oskn_Input_hasKeyUp(const oskn_Input* self, oskn_Key key) {
 	return
 		(0 != (self->keyStatePrev & key)) &&
 		(0 == (self->keyState & key));
@@ -262,24 +282,64 @@ typedef struct _oskn_App {
 
 static oskn_App app_g;
 
-BOOL oskn_ObjList_init(oskn_ObjList* self, int capacity) {
+bool oskn_Obj_isNeedHitTest(const oskn_Obj* self, const oskn_Obj* other) {
+	oskn_ObjType type1 = min(self->type, other->type);
+	oskn_ObjType type2 = max(self->type, other->type);
+
+	switch (type1) {
+	case oskn_ObjType_Player:
+		switch (type2) {
+		case oskn_ObjType_Enemy:
+		case oskn_ObjType_EnemyBullet:
+			return true;
+		default: return false;
+		}
+	case oskn_ObjType_Enemy:
+		switch (type2) {
+		case oskn_ObjType_Player:
+		case oskn_ObjType_PlayerBullet:
+			return true;
+		default: return false;
+		}
+	case oskn_ObjType_PlayerBullet:
+		switch (type2) {
+		case oskn_ObjType_Enemy:
+			return true;
+		default: return false;
+		}
+	case oskn_ObjType_EnemyBullet:
+		switch (type2) {
+		case oskn_ObjType_Player:
+			return true;
+		default: return false;
+		}
+	default: return false;
+	}
+}
+
+void oskn_Obj_hit(oskn_Obj* self, oskn_Obj* other) {
+	if (NULL == self->onHit) return;
+	self->onHit(self, other);
+}
+
+bool oskn_ObjList_init(oskn_ObjList* self, int capacity) {
 	self->capacity = capacity;
 	self->totalList = calloc(self->capacity, sizeof(oskn_Obj));
 	self->activeList = calloc(self->capacity, sizeof(int));
 	for (int i = 1, iCount = self->capacity; i < iCount; ++i) {
 		oskn_Obj* item = &self->totalList[i];
-		item->destroyed = TRUE;
+		item->destroyed = true;
 	}
 
-	return TRUE;
+	return true;
 }
 
-BOOL oskn_ObjList_free(oskn_ObjList* self) {
+bool oskn_ObjList_free(oskn_ObjList* self) {
 	free(self->activeList);
 	self->activeList = NULL;
 	free(self->totalList);
 	self->totalList = NULL;
-	return TRUE;
+	return true;
 }
 
 oskn_Obj* oskn_ObjList_get(oskn_ObjList* self, int id) {
@@ -301,7 +361,9 @@ int oskn_ObjList_add(oskn_ObjList* self, const oskn_Obj* obj) {
 	if (NULL == target) return 0;
 
 	*target = *obj;
-	target->destroyed = FALSE;
+	target->destroyed = false;
+	target->destroyTime = 0.0f;
+	target->id = i;
 	target->spawnedTime = app_g.time.time;
 
 	self->activeList[self->count] = i;
@@ -310,7 +372,14 @@ int oskn_ObjList_add(oskn_ObjList* self, const oskn_Obj* obj) {
 	return i;
 }
 
-BOOL oskn_ObjList_remove(oskn_ObjList* self, int id) {
+bool oskn_ObjList_requestRemove(oskn_ObjList* self, INT32 id, float time) {
+	oskn_Obj* obj = oskn_ObjList_get(self, id);
+	if (NULL == obj) return false;
+	obj->destroyTime = app_g.time.time + time;
+	return true;
+}
+
+bool oskn_ObjList_remove(oskn_ObjList* self, int id) {
 	for (int i = self->count; 0 < i; --i) {
 		int item = self->activeList[i];
 		if (item != id) continue;
@@ -321,87 +390,27 @@ BOOL oskn_ObjList_remove(oskn_ObjList* self, int id) {
 		--self->count;
 
 		oskn_Obj* obj = oskn_ObjList_get(self, id);
-		obj->destroyed = TRUE;
-		return TRUE;
+		obj->destroyed = true;
+		return true;
 	}
-	return FALSE;
+	return false;
 }
 
-void oskn_ObjList_update(oskn_ObjList* self) {
-	
-	for (int i = 0, iCount = self->count; i < iCount; ++i) {
-		int id = self->activeList[i];
-		oskn_Obj* obj = oskn_ObjList_get(self, id);
+void oskn_PlayerBullet_onHit(oskn_Obj* aObj, oskn_Obj* bObj) {
+	oskn_ObjList_requestRemove(&app_g.objList, aObj->id, 0.0f);
+}
 
-		switch (obj->type) {
-		case oskn_ObjType_Player: {
-			oskn_Vec2 inputDir = oskn_Input_getDirection(&app_g.input);
-			if (!oskn_Vec2_isZero(&inputDir)) {
-				oskn_Vec2 pos = obj->transform.position;
-				oskn_Vec2 move;
-				float speed = 100.0f * app_g.time.deltaTime;
-				move.x = inputDir.x * speed;
-				move.y = inputDir.y * speed;
-				pos.x += move.x;
-				pos.y += move.y;
-
-
-				oskn_Vec2 rectMin = oskn_Rect_min(&app_g.areaRect);
-				oskn_Vec2 rectMax = oskn_Rect_max(&app_g.areaRect);
-				if (pos.x - obj->collider.radius < rectMin.x) {
-					pos.x = rectMin.x + obj->collider.radius;
-				}
-				else if (rectMax.x <= pos.x + obj->collider.radius) {
-					pos.x = rectMax.x - obj->collider.radius;
-				}
-
-				if (pos.y - obj->collider.radius < rectMin.y) {
-					pos.y = rectMin.y + obj->collider.radius;
-				}
-				else if (rectMax.y <= pos.y + obj->collider.radius) {
-					pos.y = rectMax.y - obj->collider.radius;
-				}
-
-
-				obj->transform.position = pos;
-			}
-			break;
-		}
-		case oskn_ObjType_Enemy: {
-			oskn_Vec2 vec = oskn_Vec2Util_fromAngle(obj->transform.rotation);
-			float speed = obj->enemy.speed * app_g.time.deltaTime;
-			vec.x *= speed;
-			vec.y *= speed;
-			oskn_Vec2 pos = obj->transform.position;
-			pos.x += vec.x;
-			pos.y += vec.y;
-			oskn_Vec2 rectMin = oskn_Rect_min(&app_g.areaRect);
-			oskn_Vec2 rectMax = oskn_Rect_max(&app_g.areaRect);
-
-			if (pos.x - obj->collider.radius < rectMin.x) {
-				vec.x *= -1;
-				pos.x = rectMin.x + obj->collider.radius;
-			} else if (rectMax.x <= pos.x + obj->collider.radius) {
-				vec.x *= -1;
-				pos.x = rectMax.x - obj->collider.radius;
-			}
-
-			if (pos.y - obj->collider.radius < rectMin.y) {
-				vec.y *= -1;
-				pos.y = rectMin.y + obj->collider.radius;
-			} else if (rectMax.y <= pos.y + obj->collider.radius) {
-				vec.y *= -1;
-				pos.y = rectMax.y - obj->collider.radius;
-			}
-			obj->transform.position = pos;
-			obj->transform.rotation = oskn_Vec2_toAngle(&vec);
-			break;
-		}
+void oskn_Enemy_onHit(oskn_Obj* aObj, oskn_Obj* bObj) {
+	if (bObj->type == oskn_ObjType_PlayerBullet) {
+		aObj->enemy.hp -= bObj->bullet.damage;
+		if (aObj->enemy.hp <= 0) {
+			oskn_ObjList_requestRemove(&app_g.objList, aObj->id, 0.0f);
 		}
 	}
 }
 
-BOOL oskn_App_init(oskn_App* self, HWND hWnd) {
+
+bool oskn_App_init(oskn_App* self, HWND hWnd) {
 	{
 		oskn_Vec2 expected;
 		oskn_Vec2 actual;
@@ -466,14 +475,199 @@ BOOL oskn_App_init(oskn_App* self, HWND hWnd) {
 	SelectObject(self->hdcMem, self->hBitmap);		// MDCにビットマップを割り付け
 
 	oskn_Vec2 areaCenter = oskn_Rect_center(&self->areaRect);
-	oskn_Obj obj;
+	oskn_Obj obj = { 0 };
 	obj.type = oskn_ObjType_Player;
 	obj.collider.radius = 12.0f;
-	obj.transform.position.x = areaCenter.x;
-	obj.transform.position.y = areaCenter.y;
+	oskn_Vec2_init(&obj.transform.position, areaCenter.x, areaCenter.y);
+	obj.player.shotInterval = 0.1f;
+
 	self->playerId = oskn_ObjList_add(&app_g.objList, &obj);
 
-	return TRUE;
+	return true;
+}
+
+void oskn_App_updateObj(oskn_App* self) {
+	oskn_ObjList* objList = &self->objList;
+
+	for (int i = 0, iCount = objList->count; i < iCount; ++i) {
+		int id = objList->activeList[i];
+		oskn_Obj* obj = oskn_ObjList_get(objList, id);
+
+		switch (obj->type) {
+		case oskn_ObjType_Player: {
+			oskn_Vec2 inputDir = oskn_Input_getDirection(&app_g.input);
+
+			// shot 処理.
+			// update 中に追加された Obj はそのフレーム中に update を回すか否か...
+			{
+
+				if (oskn_Input_hasKey(&app_g.input, OSKN_KEY_SHOT)) {
+					if (obj->player.shotStartTime <= 0.0f) {
+						obj->player.shotStartTime = app_g.time.time;
+					}
+				}
+				else {
+					obj->player.shotStartTime = 0.0f;
+				}
+
+				if (0.0f < obj->player.shotStartTime) {
+					float time = app_g.time.time - obj->player.shotStartTime;
+					float prevTime = time - app_g.time.deltaTime;
+					INT32 count1 = (time == 0.0f) ? -1 : (INT32)(prevTime / obj->player.shotInterval);
+					INT32 count2 = (INT32)(time / obj->player.shotInterval);
+					if (count1 < count2) {
+						oskn_Obj bullet = { 0 };
+						bullet.type = oskn_ObjType_PlayerBullet;
+						bullet.onHit = oskn_PlayerBullet_onHit;
+						bullet.bullet.damage = 1.0f;
+						bullet.bullet.speed = 400.0f;
+						bullet.collider.radius = 8.0f;
+						bullet.transform.position = obj->transform.position;
+						bullet.transform.rotation = obj->transform.rotation;
+						oskn_ObjList_add(&app_g.objList, &bullet);
+					}
+
+				}
+			}
+
+
+			if (!oskn_Vec2_isZero(&inputDir)) {
+				oskn_Vec2 pos = obj->transform.position;
+				oskn_Vec2 move;
+				float speed = 100.0f * app_g.time.deltaTime;
+				move.x = inputDir.x * speed;
+				move.y = inputDir.y * speed;
+				pos.x += move.x;
+				pos.y += move.y;
+
+
+				oskn_Vec2 rectMin = oskn_Rect_min(&app_g.areaRect);
+				oskn_Vec2 rectMax = oskn_Rect_max(&app_g.areaRect);
+				if (pos.x - obj->collider.radius < rectMin.x) {
+					pos.x = rectMin.x + obj->collider.radius;
+				}
+				else if (rectMax.x <= pos.x + obj->collider.radius) {
+					pos.x = rectMax.x - obj->collider.radius;
+				}
+
+				if (pos.y - obj->collider.radius < rectMin.y) {
+					pos.y = rectMin.y + obj->collider.radius;
+				}
+				else if (rectMax.y <= pos.y + obj->collider.radius) {
+					pos.y = rectMax.y - obj->collider.radius;
+				}
+
+				if (!oskn_Input_hasKey(&app_g.input, OSKN_KEY_FIX)) {
+					obj->transform.rotation = oskn_Vec2_toAngle(&move);
+				}
+
+				obj->transform.position = pos;
+			}
+			break;
+		}
+		case oskn_ObjType_PlayerBullet: {
+			oskn_Vec2 vec = oskn_Vec2Util_fromAngle(obj->transform.rotation);
+			float speed = obj->bullet.speed * app_g.time.deltaTime;
+			vec.x *= speed;
+			vec.y *= speed;
+			oskn_Vec2 pos = obj->transform.position;
+			pos.x += vec.x;
+			pos.y += vec.y;
+			oskn_Vec2 rectMin = oskn_Rect_min(&app_g.areaRect);
+			oskn_Vec2 rectMax = oskn_Rect_max(&app_g.areaRect);
+
+			bool isOutside = false;
+			if (pos.x - obj->collider.radius < rectMin.x) {
+				isOutside = true;
+			}
+			else if (rectMax.x <= pos.x + obj->collider.radius) {
+				isOutside = true;
+			}
+
+			if (pos.y - obj->collider.radius < rectMin.y) {
+				isOutside = true;
+			}
+			else if (rectMax.y <= pos.y + obj->collider.radius) {
+				isOutside = true;
+			}
+
+			if (isOutside) {
+				oskn_ObjList_requestRemove(objList, id, 0.0f);
+			}
+
+			obj->transform.position = pos;
+			obj->transform.rotation = oskn_Vec2_toAngle(&vec);
+			break;
+		}
+		case oskn_ObjType_Enemy: {
+			oskn_Vec2 vec = oskn_Vec2Util_fromAngle(obj->transform.rotation);
+			float speed = obj->enemy.speed * app_g.time.deltaTime;
+			vec.x *= speed;
+			vec.y *= speed;
+			oskn_Vec2 pos = obj->transform.position;
+			pos.x += vec.x;
+			pos.y += vec.y;
+			oskn_Vec2 rectMin = oskn_Rect_min(&app_g.areaRect);
+			oskn_Vec2 rectMax = oskn_Rect_max(&app_g.areaRect);
+
+			if (pos.x - obj->collider.radius < rectMin.x) {
+				vec.x *= -1;
+				pos.x = rectMin.x + obj->collider.radius;
+			}
+			else if (rectMax.x <= pos.x + obj->collider.radius) {
+				vec.x *= -1;
+				pos.x = rectMax.x - obj->collider.radius;
+			}
+
+			if (pos.y - obj->collider.radius < rectMin.y) {
+				vec.y *= -1;
+				pos.y = rectMin.y + obj->collider.radius;
+			}
+			else if (rectMax.y <= pos.y + obj->collider.radius) {
+				vec.y *= -1;
+				pos.y = rectMax.y - obj->collider.radius;
+			}
+			obj->transform.position = pos;
+			obj->transform.rotation = oskn_Vec2_toAngle(&vec);
+			break;
+		}
+		}
+	}
+
+	// 衝突判定.
+	for (int i = 0, iCount = objList->count; i < iCount; ++i) {
+		int aId = objList->activeList[i];
+		oskn_Obj* aObj = oskn_ObjList_get(objList, aId);
+		oskn_Vec2 aPos = aObj->transform.position;
+		oskn_Collider aCol = aObj->collider;
+
+		for (int j = i + 1, jCount = objList->count; j < jCount; ++j) {
+			int bId = objList->activeList[j];
+			oskn_Obj* bObj = oskn_ObjList_get(objList, bId);
+			if (!oskn_Obj_isNeedHitTest(aObj, bObj)) continue;
+
+			oskn_Vec2 bPos = bObj->transform.position;
+			oskn_Collider bCol = bObj->collider;
+
+			float radius = aCol.radius + bCol.radius;
+			float sqrRadius = radius * radius;
+			oskn_Vec2 d;
+			d.x = bPos.x - aPos.x;
+			d.y = bPos.y - aPos.y;
+			bool isHit = oskn_Vec2_sqrMagnitude(&d) < sqrRadius;
+			if (!isHit) continue;
+			oskn_Obj_hit(aObj, bObj);
+			oskn_Obj_hit(bObj, aObj);
+		}
+	}
+
+	for (int i = objList->count - 1; 0 <= i; --i) {
+		int id = objList->activeList[i];
+		oskn_Obj* obj = oskn_ObjList_get(objList, id);
+		if (obj->destroyTime < app_g.time.time) continue;
+		oskn_ObjList_remove(objList, id);
+	}
+
 }
 
 void oskn_App_update(oskn_App* self) {
@@ -492,11 +686,14 @@ void oskn_App_update(oskn_App* self) {
 			float x = self->areaRect.x + self->areaRect.width * rand() / RAND_MAX;
 			float y = self->areaRect.y + self->areaRect.height * rand() / RAND_MAX;
 
-			oskn_Obj obj;
+			oskn_Obj obj = { 0 };
 			obj.type = oskn_ObjType_Enemy;
 			obj.transform.position.x = x;
 			obj.transform.position.y = y;
 			obj.collider.radius = 12.0f;
+			obj.enemy.hp = 4;
+			obj.onHit = oskn_Enemy_onHit;
+
 			//		obj.transform.rotation = 360.0f * rand() / RAND_MAX;
 			obj.transform.rotation = self->time.time * 10.0f;
 			obj.enemy.speed = 25.0f + 75.0f * rand() / RAND_MAX;
@@ -505,12 +702,12 @@ void oskn_App_update(oskn_App* self) {
 		}
 	}
 
-	oskn_ObjList_update(&self->objList);
+	oskn_App_updateObj(self);
 }
 
-BOOL oskn_App_free(oskn_App* self) {
+bool oskn_App_free(oskn_App* self) {
 	oskn_ObjList_free(&self->objList);
-	return TRUE;
+	return true;
 }
 
 void draw(HWND hWnd) {
@@ -565,15 +762,16 @@ oskn_Key oskn_KeyUtil_fromWParam(WPARAM wParam) {
 	switch (wParam) {
 	case VK_LEFT:     return OSKN_KEY_LEFT;
 	case 'A':         return OSKN_KEY_LEFT;
-	case VK_RIGHT:    return OSKN_KEY_RIGHT;
 	case 'D':         return OSKN_KEY_RIGHT;
-	case VK_UP:       return OSKN_KEY_UP;
 	case 'W':         return OSKN_KEY_UP;
-	case VK_DOWN:     return OSKN_KEY_DOWN;
 	case 'S':         return OSKN_KEY_DOWN;
+	case 'J':         return OSKN_KEY_SHOT;
+
+	case VK_RIGHT:    return OSKN_KEY_RIGHT;
+	case VK_UP:       return OSKN_KEY_UP;
+	case VK_DOWN:     return OSKN_KEY_DOWN;
 	case VK_SHIFT:    return OSKN_KEY_FIX;
-	case VK_RETURN:   return OSKN_KEY_SHOT;
-	case VK_SPACE:    return OSKN_KEY_SHOT;
+	case 'Z':         return OSKN_KEY_SHOT;
 	default:          return OSKN_KEY_NONE;
 	}
 }
@@ -707,33 +905,19 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 
 	ShowWindow(hWnd, nCmdShow);
 
-	//CreateWindowEx(
-	//	WS_EX_LEFT, TEXT("STATIC"), TEXT("Stand by Ready!!"),
-	//	WS_CHILD | WS_VISIBLE,
-	//	0, 0, 400, 100,
-	//	hWnd, NULL, hInstance, NULL
-	//);
-
-	//CreateWindowEx(
-	//	WS_EX_LEFT, TEXT("STATIC"), TEXT("Stand by Ready!!\nうんこ\nunko"),
-	//	WS_CHILD | WS_VISIBLE,
-	//	0, 100, 400, 100,
-	//	hWnd, NULL, hInstance, NULL
-	//);
-
 	float totalTime = 0;
 	UINT64 prevTime = GetTickCount64();
-	while (TRUE) {
+	while (true) {
 		MSG msg;
 		int result = PeekMessage(&msg, NULL, 0, 0, PM_NOREMOVE);
 		if (result) {
 			result = GetMessage(&msg, NULL, 0, 0);
-			BOOL hasError = result == -1;
+			bool hasError = result == -1;
 			if (hasError) {
 				MessageBox(NULL, TEXT("メッセージの取得に失敗"), NULL, MB_ICONERROR);
 				return 0;
 			}
-			BOOL isQuit = msg.message == WM_QUIT;
+			bool isQuit = msg.message == WM_QUIT;
 			if (isQuit) {
 				return msg.wParam;
 			}
@@ -750,7 +934,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 			else {
 				totalTime -= app_g.frameInterval;
 				oskn_App_update(&app_g);
-				InvalidateRect(hWnd, NULL, FALSE);
+				InvalidateRect(hWnd, NULL, false);
 			}
 
 		}
