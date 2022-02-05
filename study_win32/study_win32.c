@@ -97,12 +97,13 @@ typedef struct _oskn_ObjList {
 
 typedef enum _oskn_Key {
 	OSKN_KEY_NONE = 0,
-	OSKN_KEY_LEFT  = 1 << 0,
-	OSKN_KEY_RIGHT = 1 << 1,
-	OSKN_KEY_UP    = 1 << 2,
-	OSKN_KEY_DOWN  = 1 << 3,
-	OSKN_KEY_SHOT  = 1 << 4,
-	OSKN_KEY_FIX   = 1 << 5,
+	OSKN_KEY_START = 1 << 0,
+	OSKN_KEY_LEFT  = 1 << 1,
+	OSKN_KEY_RIGHT = 1 << 2,
+	OSKN_KEY_UP    = 1 << 3,
+	OSKN_KEY_DOWN  = 1 << 4,
+	OSKN_KEY_SHOT  = 1 << 5,
+	OSKN_KEY_FIX   = 1 << 6,
 } oskn_Key;
 
 typedef struct _oskn_Input {
@@ -131,6 +132,8 @@ typedef struct _oskn_App {
 	HBITMAP hBitmap;
 	HDC     hdcMem;
 	oskn_Input input;
+	INT32 enemyAddCountMax;
+	INT32 enemyAddCount;
 
 	oskn_AppState appState;
 	float appStateStartTime;
@@ -251,6 +254,8 @@ oskn_Vec2 oskn_Rect_center(const oskn_Rect* self) {
 
 oskn_Key oskn_Key_fromWParam(WPARAM wParam) {
 	switch (wParam) {
+	case VK_SPACE:    return OSKN_KEY_START;
+
 	case VK_LEFT:     return OSKN_KEY_LEFT;
 	case VK_RIGHT:    return OSKN_KEY_RIGHT;
 	case VK_UP:       return OSKN_KEY_UP;
@@ -412,7 +417,7 @@ bool oskn_ObjList_requestRemove(oskn_ObjList* self, INT32 id, float time) {
 }
 
 bool oskn_ObjList_remove(oskn_ObjList* self, int id) {
-	for (int i = self->count; 0 < i; --i) {
+	for (int i = self->count - 1; 0 <= i; --i) {
 		int item = self->activeList[i];
 		if (item != id) continue;
 
@@ -516,7 +521,7 @@ bool oskn_App_init(oskn_App* self, HWND hWnd) {
 	self->hdcMem = CreateCompatibleDC(NULL);		// カレントスクリーン互換
 	SelectObject(self->hdcMem, self->hBitmap);		// MDCにビットマップを割り付け
 
-	self->appState = oskn_AppState_Title;
+	self->appState = oskn_AppState_None;
 	return true;
 }
 
@@ -721,18 +726,46 @@ void oskn_App_update(oskn_App* self) {
 		}
 		float stateTime = self->time.time - self->appStateStartTime;
 		switch (self->appState) {
+		case oskn_AppState_None: {
+			nextState = oskn_AppState_Title;
+			break;
+		}
 		case oskn_AppState_Title: {
-			if (oskn_Input_hasKeyDown(&self->input, OSKN_KEY_SHOT)) {
-				nextState = oskn_AppState_Ready;
+			if (isEnter) {
+				for (int i = 0, iCount = self->objList.count; i < iCount; ++i) {
+					int objId = self->objList.activeList[i];
+					oskn_ObjList_requestRemove(&self->objList, objId, 0.0f);
+				}
+				app_g.enemyAddCount = 0;
+				app_g.enemyAddCountMax = 0;
+
+				oskn_Vec2 areaCenter = oskn_Rect_center(&self->areaRect);
+				oskn_Obj obj = { 0 };
+				obj.type = oskn_ObjType_Player;
+				obj.collider.radius = 12.0f;
+				obj.onHit = oskn_Player_onHit;
+				obj.player.hp = 1.0f;
+				oskn_Vec2_init(&obj.transform.position, areaCenter.x, areaCenter.y);
+				obj.player.shotInterval = 0.1f;
+
+				self->playerId = oskn_ObjList_add(&app_g.objList, &obj);
+			}
+
+			if (0.5f <= stateTime) {
+				if (oskn_Input_hasKeyDown(&self->input, OSKN_KEY_START)) {
+					nextState = oskn_AppState_Ready;
+				}
 			}
 			break;
 		}
 		case oskn_AppState_Ready: {
 			if (isEnter) {
-				for (int i = 0, iCount = self->objList.count - 1; i < iCount; ++i) {
+				for (int i = 0, iCount = self->objList.count; i < iCount; ++i) {
 					int objId = self->objList.activeList[i];
 					oskn_ObjList_requestRemove(&self->objList, objId, 0.0f);
 				}
+				app_g.enemyAddCount = 0;
+				app_g.enemyAddCountMax = 32;
 
 				oskn_Vec2 areaCenter = oskn_Rect_center(&self->areaRect);
 				oskn_Obj obj = { 0 };
@@ -752,15 +785,33 @@ void oskn_App_update(oskn_App* self) {
 			break;
 		}
 		case oskn_AppState_Main: {
-			oskn_Obj* player = oskn_ObjList_get(&self->objList, self->playerId);
-			if (player->player.hp <= 0.0f) {
-				nextState = oskn_AppState_Over;
+			// ゲームクリア判定.
+			{
+				if (self->enemyAddCountMax <= self->enemyAddCount) {
+					INT32 enemyCount = 0;
+					for (int i = 0, iCount = self->objList.count; i < iCount; ++i) {
+						INT32 objId = self->objList.activeList[i];
+						oskn_Obj* obj = oskn_ObjList_get(&self->objList, objId);
+						if (obj->type != oskn_ObjType_Enemy) continue;
+						++enemyCount;
+					}
+					if (enemyCount <= 0) {
+						nextState = oskn_AppState_Clear;
+					}
+				}
+			}
+			// ゲームオーバー判定.
+			{
+				oskn_Obj* player = oskn_ObjList_get(&self->objList, self->playerId);
+				if (player->player.hp <= 0.0f) {
+					nextState = oskn_AppState_Over;
+				}
 			}
 			break;
 		}
 		case oskn_AppState_Over: {
 			if (0.5f <= stateTime) {
-				if (oskn_Input_hasKeyDown(&self->input, OSKN_KEY_SHOT)) {
+				if (oskn_Input_hasKeyDown(&self->input, OSKN_KEY_START)) {
 					nextState = oskn_AppState_Title;
 				}
 			}
@@ -770,6 +821,11 @@ void oskn_App_update(oskn_App* self) {
 			break;
 		}
 		case oskn_AppState_Clear: {
+			if (0.5f <= stateTime) {
+				if (oskn_Input_hasKeyDown(&self->input, OSKN_KEY_START)) {
+					nextState = oskn_AppState_Title;
+				}
+			}
 			if (3.0f <= stateTime) {
 				nextState = oskn_AppState_Title;
 			}
@@ -780,21 +836,36 @@ void oskn_App_update(oskn_App* self) {
 	} while (nextState != oskn_AppState_None && stateLoopI < stateLoopLimit);
 
 	// 岩石の生成.
-	{
-		float spawnInterval = 1.0f;
+	if (app_g.enemyAddCount < app_g.enemyAddCountMax) {
+		float spawnInterval = 0.5f;
 		INT32 prevSec = (INT32)((self->time.time - self->frameInterval) / spawnInterval);
 		INT32 sec = (INT32)(self->time.time / spawnInterval);
 
 
 		if (1.0f < self->time.time && (prevSec < sec)) {
 			// spawn
-			float x = self->areaRect.x + self->areaRect.width * rand() / RAND_MAX;
-			float y = self->areaRect.y + self->areaRect.height * rand() / RAND_MAX;
+			oskn_Vec2 pos = { 0 };
+			int n = 4 * rand() / RAND_MAX;
+			oskn_Vec2 rectMin = oskn_Rect_min(&self->areaRect);
+			oskn_Vec2 rectMax = oskn_Rect_max(&self->areaRect);
+			switch (n) {
+			case 0:
+			case 1:
+				pos.x = (n==0) ? rectMin.x : rectMax.x;
+				pos.y = self->areaRect.y + self->areaRect.height * rand() / RAND_MAX;
+				break;
+			case 2:
+			case 3:
+			default:
+				pos.x = self->areaRect.x + self->areaRect.width * rand() / RAND_MAX;
+				pos.y = (n == 2) ? rectMin.y : rectMax.y;
+				break;
+			}
 
 			oskn_Obj obj = { 0 };
 			obj.type = oskn_ObjType_Enemy;
-			obj.transform.position.x = x;
-			obj.transform.position.y = y;
+			obj.transform.position.x = pos.x;
+			obj.transform.position.y = pos.y;
 			obj.collider.radius = 12.0f;
 			obj.enemy.hp = 4;
 			obj.onHit = oskn_Enemy_onHit;
@@ -804,6 +875,7 @@ void oskn_App_update(oskn_App* self) {
 			obj.enemy.speed = 25.0f + 75.0f * rand() / RAND_MAX;
 			oskn_ObjList_add(&app_g.objList, &obj);
 
+			++app_g.enemyAddCount;
 		}
 	}
 
@@ -874,22 +946,28 @@ void draw(HWND hWnd) {
 		textY = (INT32)(app_g.screenSize.y * 0.3f - textSize.cy * 0.5f);
 		TextOut(hdc, textX, textY, str, lstrlen(str));
 
-		wsprintf(str, TEXT("ショット: Z"));
+		wsprintf(str, TEXT("SPACE でスタート"));
 		GetTextExtentPoint32(hdc, str, lstrlen(str), &textSize);
 		textX = (INT32)(app_g.screenSize.x * 0.5f - textSize.cx * 0.5f);
 		textY = (INT32)(app_g.screenSize.y * 0.5f + textSize.cy * 1.1f);
 		TextOut(hdc, textX, textY, str, lstrlen(str));
 
-		wsprintf(str, TEXT("向き固定: SHIFT"));
+		wsprintf(str, TEXT("ショット: Z"));
 		GetTextExtentPoint32(hdc, str, lstrlen(str), &textSize);
 		textX = (INT32)(app_g.screenSize.x * 0.5f - textSize.cx * 0.5f);
 		textY = (INT32)(app_g.screenSize.y * 0.5f + textSize.cy * 2.2f);
 		TextOut(hdc, textX, textY, str, lstrlen(str));
 
-		wsprintf(str, TEXT("移動: ↑↓←→"));
+		wsprintf(str, TEXT("向き固定: SHIFT"));
 		GetTextExtentPoint32(hdc, str, lstrlen(str), &textSize);
 		textX = (INT32)(app_g.screenSize.x * 0.5f - textSize.cx * 0.5f);
 		textY = (INT32)(app_g.screenSize.y * 0.5f + textSize.cy * 3.3f);
+		TextOut(hdc, textX, textY, str, lstrlen(str));
+
+		wsprintf(str, TEXT("移動: ↑↓←→"));
+		GetTextExtentPoint32(hdc, str, lstrlen(str), &textSize);
+		textX = (INT32)(app_g.screenSize.x * 0.5f - textSize.cx * 0.5f);
+		textY = (INT32)(app_g.screenSize.y * 0.5f + textSize.cy * 4.4f);
 		TextOut(hdc, textX, textY, str, lstrlen(str));
 		break;
 	}
