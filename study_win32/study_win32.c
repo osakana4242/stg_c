@@ -16,21 +16,125 @@
 #include <math.h>
 #include <assert.h>
 
-#define MAX_LOADSTRING 100
 
-// グローバル変数:
-HINSTANCE hInst;                                // 現在のインターフェイス
-TCHAR szTitle[MAX_LOADSTRING];                  // タイトル バーのテキスト
-TCHAR szWindowClass[MAX_LOADSTRING];            // メイン ウィンドウ クラス名
-
-#define ANGLE_PI 3.141592f
 typedef float oskn_Angle;
 
-const float DEG_TO_RAD= ANGLE_PI / 180.0f;
-const float RAD_TO_DEG = 180.0f / ANGLE_PI;
+typedef struct _oskn_Time {
+	float time;
+	int frameCount;
+	float deltaTime;
+} oskn_Time;
+
+typedef struct _oskn_Vec2 {
+	float x;
+	float y;
+} oskn_Vec2;
+
+typedef struct _oskn_Rect {
+	float x;
+	float y;
+	float width;
+	float height;
+} oskn_Rect;
+
+typedef struct _oskn_Transform {
+	oskn_Vec2 position;
+	oskn_Angle rotation;
+} oskn_Transform;
+
+typedef struct _oskn_Collider {
+	float radius;
+} oskn_Collider;
+
+typedef struct _oskn_Player {
+	oskn_Vec2 targetPosition;
+	float shotInterval;
+	float shotStartTime;
+} oskn_Player;
+
+typedef struct _oskn_Bullet {
+	float damage;
+	float speed;
+} oskn_Bullet;
+
+typedef struct _oskn_Enemy {
+	float hp;
+	float speed;
+} oskn_Enemy;
+
+typedef enum _oskn_ObjType {
+	oskn_ObjType_None,
+	oskn_ObjType_Player,
+	oskn_ObjType_Enemy,
+	oskn_ObjType_PlayerBullet,
+	oskn_ObjType_EnemyBullet,
+} oskn_ObjType;
+
+typedef struct _oskn_Obj {
+	bool destroyed;
+	/// <summary>この時間に達していたら remove する. 0 以下は無効.</summary>
+	float destroyTime;
+	INT32 id;
+	LPCWSTR name;
+	float spawnedTime;
+
+	oskn_ObjType type;
+	oskn_Transform transform;
+	oskn_Collider collider;
+	oskn_Player player;
+	oskn_Bullet bullet;
+	oskn_Enemy enemy;
+
+	void(*onHit)(struct _oskn_Obj* self, struct _oskn_Obj* other);
+} oskn_Obj;
+
+typedef struct _oskn_ObjList {
+	oskn_Obj* totalList;
+	int* activeList;
+	int count;
+	int capacity;
+} oskn_ObjList;
+
+typedef enum _oskn_Key {
+	OSKN_KEY_NONE = 0,
+	OSKN_KEY_LEFT  = 1 << 0,
+	OSKN_KEY_RIGHT = 1 << 1,
+	OSKN_KEY_UP    = 1 << 2,
+	OSKN_KEY_DOWN  = 1 << 3,
+	OSKN_KEY_SHOT  = 1 << 4,
+	OSKN_KEY_FIX   = 1 << 5,
+} oskn_Key;
+
+typedef struct _oskn_Input {
+	INT32 keyStatePrev;
+	INT32 keyState;
+	INT32 keyStateNext;
+} oskn_Input;
+
+typedef struct _oskn_App {
+	oskn_ObjList objList;
+	int playerId;
+	float fps;
+	float frameInterval;
+	oskn_Vec2 screenSize;
+	oskn_Rect areaRect;
+	oskn_Time time;
+	HBITMAP hBitmap;
+	HDC     hdcMem;
+	oskn_Input input;
+	
+} oskn_App;
+
+
+#define ANGLE_PI 3.141592f
+#define DEG_TO_RAD (ANGLE_PI / 180.0f)
+#define RAD_TO_DEG (180.0f / ANGLE_PI)
+
+HINSTANCE hInst_g = NULL;
+oskn_App app_g = { 0 };
+
 
 bool oskn_Float_roundEq(float a, float b, float threshold) {
-	BOOL ho;
 	float d = a - b;
 	return -threshold <= d && d <= threshold;
 }
@@ -47,11 +151,6 @@ float oskn_AngleUtil_fromRad(float rad) {
 	return rad * RAD_TO_DEG;
 }
 
-typedef struct _oskn_Time {
-	float time;
-	int frameCount;
-	float deltaTime;
-} oskn_Time;
 
 void oskn_Time_add(oskn_Time* self, float deltaTime) {
 	self->time += deltaTime;
@@ -59,10 +158,6 @@ void oskn_Time_add(oskn_Time* self, float deltaTime) {
 	++self->frameCount;
 }
 
-typedef struct _oskn_Vec2 {
-	float x;
-	float y;
-} oskn_Vec2;
 
 void oskn_Vec2_init(oskn_Vec2* self, float x, float y) {
 	self->x = x;
@@ -94,6 +189,7 @@ oskn_Angle oskn_Vec2_toAngle(const oskn_Vec2* self) {
 	return oskn_AngleUtil_fromRad( rad );
 }
 
+
 oskn_Vec2 oskn_Vec2Util_fromAngle(oskn_Angle angle) {
 	float rad = oskn_Angle_toRad(&angle);
 	oskn_Vec2 vec;
@@ -112,12 +208,6 @@ bool oskn_Vec2Util_roundEq(const oskn_Vec2* a, const oskn_Vec2* b, float thresho
 		oskn_Float_roundEq(a->y, b->y, threshold);
 }
 
-typedef struct _oskn_Rect {
-	float x;
-	float y;
-	float width;
-	float height;
-} oskn_Rect;
 
 void oskn_Rect_init(oskn_Rect* self, float x, float y, float width, float height) {
 	self->x = x;
@@ -147,81 +237,25 @@ oskn_Vec2 oskn_Rect_center(const oskn_Rect* self) {
 	return vec;
 }
 
-typedef struct _oskn_Transform {
-	oskn_Vec2 position;
-	oskn_Angle rotation;
-} oskn_Transform;
 
-typedef enum _oskn_ObjType {
-	oskn_ObjType_None,
-	oskn_ObjType_Player,
-	oskn_ObjType_Enemy,
-	oskn_ObjType_PlayerBullet,
-	oskn_ObjType_EnemyBullet,
-} oskn_ObjType;
+oskn_Key oskn_Key_fromWParam(WPARAM wParam) {
+	switch (wParam) {
+	case VK_LEFT:     return OSKN_KEY_LEFT;
+	case 'A':         return OSKN_KEY_LEFT;
+	case 'D':         return OSKN_KEY_RIGHT;
+	case 'W':         return OSKN_KEY_UP;
+	case 'S':         return OSKN_KEY_DOWN;
+	case 'J':         return OSKN_KEY_SHOT;
 
-typedef struct _oskn_Collider {
-	float radius;
-} oskn_Collider;
+	case VK_RIGHT:    return OSKN_KEY_RIGHT;
+	case VK_UP:       return OSKN_KEY_UP;
+	case VK_DOWN:     return OSKN_KEY_DOWN;
+	case VK_SHIFT:    return OSKN_KEY_FIX;
+	case 'Z':         return OSKN_KEY_SHOT;
+	default:          return OSKN_KEY_NONE;
+	}
+}
 
-typedef struct _oskn_Player {
-	oskn_Vec2 targetPosition;
-	float shotInterval;
-	float shotStartTime;
-} oskn_Player;
-
-typedef struct _oskn_Bullet {
-	float damage;
-	float speed;
-} oskn_Bullet;
-
-typedef struct _oskn_Enemy {
-	float hp;
-	float speed;
-} oskn_Enemy;
-
-
-typedef struct _oskn_Obj {
-	bool destroyed;
-	/// <summary>この時間に達していたら remove する. 0 以下は無効.</summary>
-	float destroyTime;
-	INT32 id;
-	LPCWSTR name;
-	float spawnedTime;
-
-	oskn_ObjType type;
-	oskn_Transform transform;
-	oskn_Collider collider;
-	oskn_Player player;
-	oskn_Bullet bullet;
-	oskn_Enemy enemy;
-
-	void(*onHit)(struct _oskn_Obj* self, struct _oskn_Obj* other);
-} oskn_Obj;
-
-
-typedef struct _oskn_ObjList {
-	oskn_Obj* totalList;
-	int* activeList;
-	int count;
-	int capacity;
-} oskn_ObjList;
-
-typedef enum _oskn_Key {
-	OSKN_KEY_NONE = 0,
-	OSKN_KEY_LEFT  = 1 << 0,
-	OSKN_KEY_RIGHT = 1 << 1,
-	OSKN_KEY_UP    = 1 << 2,
-	OSKN_KEY_DOWN  = 1 << 3,
-	OSKN_KEY_SHOT  = 1 << 4,
-	OSKN_KEY_FIX   = 1 << 5,
-} oskn_Key;
-
-typedef struct _oskn_Input {
-	INT32 keyStatePrev;
-	INT32 keyState;
-	INT32 keyStateNext;
-} oskn_Input;
 
 bool oskn_Input_hasKey(const oskn_Input* self, oskn_Key key) {
 	return 0 != (self->keyState & key);
@@ -266,21 +300,6 @@ void oskn_Input_update(oskn_Input* self) {
 	self->keyState = self->keyStateNext;
 }
 
-typedef struct _oskn_App {
-	oskn_ObjList objList;
-	int playerId;
-	float fps;
-	float frameInterval;
-	oskn_Vec2 screenSize;
-	oskn_Rect areaRect;
-	oskn_Time time;
-	HBITMAP hBitmap;
-	HDC     hdcMem;
-	oskn_Input input;
-	
-} oskn_App;
-
-static oskn_App app_g;
 
 bool oskn_Obj_isNeedHitTest(const oskn_Obj* self, const oskn_Obj* other) {
 	oskn_ObjType type1 = min(self->type, other->type);
@@ -321,6 +340,7 @@ void oskn_Obj_hit(oskn_Obj* self, oskn_Obj* other) {
 	if (NULL == self->onHit) return;
 	self->onHit(self, other);
 }
+
 
 bool oskn_ObjList_init(oskn_ObjList* self, int capacity) {
 	self->capacity = capacity;
@@ -396,9 +416,11 @@ bool oskn_ObjList_remove(oskn_ObjList* self, int id) {
 	return false;
 }
 
+
 void oskn_PlayerBullet_onHit(oskn_Obj* aObj, oskn_Obj* bObj) {
 	oskn_ObjList_requestRemove(&app_g.objList, aObj->id, 0.0f);
 }
+
 
 void oskn_Enemy_onHit(oskn_Obj* aObj, oskn_Obj* bObj) {
 	if (bObj->type == oskn_ObjType_PlayerBullet) {
@@ -409,8 +431,7 @@ void oskn_Enemy_onHit(oskn_Obj* aObj, oskn_Obj* bObj) {
 	}
 }
 
-
-bool oskn_App_init(oskn_App* self, HWND hWnd) {
+void oskn_App_test(oskn_App* self) {
 	{
 		oskn_Vec2 expected;
 		oskn_Vec2 actual;
@@ -456,6 +477,10 @@ bool oskn_App_init(oskn_App* self, HWND hWnd) {
 		actual = oskn_Vec2_toAngle(&vec);
 		assert(oskn_Float_roundEq(expected, actual, 0.01f));
 	}
+}
+
+bool oskn_App_init(oskn_App* self, HWND hWnd) {
+	oskn_App_test(self);
 
 	oskn_ObjList_init(&self->objList, 255);
 	self->screenSize.x = 320;
@@ -710,6 +735,7 @@ bool oskn_App_free(oskn_App* self) {
 	return true;
 }
 
+
 void draw(HWND hWnd) {
 	TCHAR str[255];
 	HDC hdc = app_g.hdcMem;
@@ -758,31 +784,7 @@ void draw(HWND hWnd) {
 	TextOut(hdc, 10, 10, str, lstrlen(str));
 }
 
-oskn_Key oskn_KeyUtil_fromWParam(WPARAM wParam) {
-	switch (wParam) {
-	case VK_LEFT:     return OSKN_KEY_LEFT;
-	case 'A':         return OSKN_KEY_LEFT;
-	case 'D':         return OSKN_KEY_RIGHT;
-	case 'W':         return OSKN_KEY_UP;
-	case 'S':         return OSKN_KEY_DOWN;
-	case 'J':         return OSKN_KEY_SHOT;
-
-	case VK_RIGHT:    return OSKN_KEY_RIGHT;
-	case VK_UP:       return OSKN_KEY_UP;
-	case VK_DOWN:     return OSKN_KEY_DOWN;
-	case VK_SHIFT:    return OSKN_KEY_FIX;
-	case 'Z':         return OSKN_KEY_SHOT;
-	default:          return OSKN_KEY_NONE;
-	}
-}
-
 LRESULT CALLBACK myWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
-#ifdef _DEBUG
-	//TCHAR debugText[1024];
-	//wsprintf(debugText, TEXT("uMsg=%d, wParam=%d, lParam=%d\n"), uMsg, wParam, lParam);
-	//OutputDebugString(debugText);
-#endif
-	LPCTSTR lptStr = TEXT("ほげら");
 	HDC hdc;
 	PAINTSTRUCT paint;
 
@@ -802,8 +804,6 @@ LRESULT CALLBACK myWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
 
 		draw(hWnd);
 
-
-		// BitBlt(hdc, 0, 0, rcClient.right, rcClient.bottom, app_g.hdcMem, 0, 0, SRCCOPY);
 		StretchBlt(
 			hdc, 0, 0, rcClient.right, rcClient.bottom,
 			app_g.hdcMem, 0, 0, (int)app_g.screenSize.x, (int)app_g.screenSize.y, SRCCOPY);
@@ -811,14 +811,14 @@ LRESULT CALLBACK myWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
 		return 0;
 	}
 	case WM_KEYDOWN: {
-		oskn_Key key = oskn_KeyUtil_fromWParam(wParam);
+		oskn_Key key = oskn_Key_fromWParam(wParam);
 		if (key != OSKN_KEY_NONE) {
 			app_g.input.keyStateNext |= key;
 		}
 		return 0;
 	}
 	case WM_KEYUP: {
-		oskn_Key key = oskn_KeyUtil_fromWParam(wParam);
+		oskn_Key key = oskn_Key_fromWParam(wParam);
 		if (key != OSKN_KEY_NONE) {
 			app_g.input.keyStateNext &= ~key;
 		}
@@ -857,8 +857,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     UNREFERENCED_PARAMETER(hPrevInstance);
     UNREFERENCED_PARAMETER(lpCmdLine);
 
-	PCWSTR appTitle = L"うんこ";
-	PCWSTR windowClass = L"STATIC";
+	PCTSTR appTitle = TEXT("岩石破壊");
 
 	WNDCLASS wc;
 	wc.style = CS_HREDRAW | CS_VREDRAW;
@@ -878,20 +877,10 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 		return 0;
 	}
 
-
-    // TODO: ここにコードを挿入してください。
-
-    // グローバル文字列を初期化する
-	lstrcpy(szTitle, appTitle);
-	lstrcpy(szWindowClass, windowClass);
-
-//    MyRegisterClass(hInstance);
-
-    // アプリケーション初期化の実行:
-	hInst = hInstance; // グローバル変数にインスタンス ハンドルを格納する
+	hInst_g = hInstance;
 
 	HWND hWnd = CreateWindow(
-		(LPCTSTR)atom, szTitle,
+		(LPCTSTR)atom, appTitle,
 		WS_OVERLAPPEDWINDOW,
 		//100, 100, 640, 480,
 		CW_USEDEFAULT, CW_USEDEFAULT, 320 * 3, 240 * 3,
