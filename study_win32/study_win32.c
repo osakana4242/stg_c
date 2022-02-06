@@ -50,6 +50,15 @@ typedef struct _oskn_Player {
 	float hp;
 	float shotInterval;
 	float shotStartTime;
+	/// <summary>ショット1発に必要な燃料量</summary>
+	float shotFuelConsume;
+	/// <summary>燃料残量</summary>
+	float shotFuelRest;
+	/// <summary>燃料回復量(秒間)</summary>
+	float shotFuelRecover;
+	/// <summary>自動回復で回復できる燃料上限</summary>
+	float shotFuelCapacity1;
+	float shotFuelCapacity2;
 } oskn_Player;
 
 typedef struct _oskn_Bullet {
@@ -549,23 +558,35 @@ void oskn_App_updateObj(oskn_App* self) {
 					obj->player.shotStartTime = 0.0f;
 				}
 
+				// 燃料の自動回復.
+				if (obj->player.shotFuelRest < obj->player.shotFuelCapacity1) {
+					float nextFuel = obj->player.shotFuelRest + obj->player.shotFuelRecover * app_g.time.deltaTime;
+					nextFuel = min(obj->player.shotFuelCapacity1, nextFuel);
+					obj->player.shotFuelRest = nextFuel;
+				}
+
 				if (0.0f < obj->player.shotStartTime) {
 					float time = app_g.time.time - obj->player.shotStartTime;
 					float prevTime = time - app_g.time.deltaTime;
 					INT32 count1 = (time == 0.0f) ? -1 : (INT32)(prevTime / obj->player.shotInterval);
 					INT32 count2 = (INT32)(time / obj->player.shotInterval);
 					if (count1 < count2) {
-						oskn_Obj bullet = { 0 };
-						bullet.type = oskn_ObjType_PlayerBullet;
-						bullet.onHit = oskn_PlayerBullet_onHit;
-						bullet.bullet.damage = 1.0f;
-						bullet.bullet.speed = 400.0f;
-						bullet.collider.radius = 8.0f;
-						bullet.transform.position = obj->transform.position;
-						bullet.transform.rotation = obj->transform.rotation;
-						oskn_ObjList_add(&app_g.objList, &bullet);
-					}
+						float nextFuel = obj->player.shotFuelRest - obj->player.shotFuelConsume;
+						bool hasFuel = 0 <= nextFuel;
+						if (hasFuel) {
+							obj->player.shotFuelRest = nextFuel;
 
+							oskn_Obj bullet = { 0 };
+							bullet.type = oskn_ObjType_PlayerBullet;
+							bullet.onHit = oskn_PlayerBullet_onHit;
+							bullet.bullet.damage = 1.0f;
+							bullet.bullet.speed = 400.0f;
+							bullet.collider.radius = 8.0f;
+							bullet.transform.position = obj->transform.position;
+							bullet.transform.rotation = obj->transform.rotation;
+							oskn_ObjList_add(&app_g.objList, &bullet);
+						}
+					}
 				}
 			}
 
@@ -709,6 +730,24 @@ void oskn_App_updateObj(oskn_App* self) {
 
 }
 
+void oskn_App_createPlayer(oskn_App* self) {
+	oskn_Vec2 areaCenter = oskn_Rect_center(&self->areaRect);
+	oskn_Obj obj = { 0 };
+	obj.type = oskn_ObjType_Player;
+	obj.collider.radius = 12.0f;
+	obj.onHit = oskn_Player_onHit;
+	obj.player.hp = 1.0f;
+	oskn_Vec2_init(&obj.transform.position, areaCenter.x, areaCenter.y);
+	obj.player.shotInterval = 0.1f;
+	obj.player.shotFuelCapacity1 = 100;
+	obj.player.shotFuelCapacity2 = 200;
+	obj.player.shotFuelRest = obj.player.shotFuelCapacity1;
+	obj.player.shotFuelRecover = obj.player.shotFuelCapacity1;
+	obj.player.shotFuelConsume = obj.player.shotFuelCapacity1 / 3;
+
+	self->playerId = oskn_ObjList_add(&app_g.objList, &obj);
+}
+
 void oskn_App_update(oskn_App* self) {
 	oskn_Time_add(&self->time, self->frameInterval);
 	oskn_Input_update(&self->input);
@@ -739,16 +778,7 @@ void oskn_App_update(oskn_App* self) {
 				app_g.enemyAddCount = 0;
 				app_g.enemyAddCountMax = 0;
 
-				oskn_Vec2 areaCenter = oskn_Rect_center(&self->areaRect);
-				oskn_Obj obj = { 0 };
-				obj.type = oskn_ObjType_Player;
-				obj.collider.radius = 12.0f;
-				obj.onHit = oskn_Player_onHit;
-				obj.player.hp = 1.0f;
-				oskn_Vec2_init(&obj.transform.position, areaCenter.x, areaCenter.y);
-				obj.player.shotInterval = 0.1f;
-
-				self->playerId = oskn_ObjList_add(&app_g.objList, &obj);
+				oskn_App_createPlayer(self);
 			}
 
 			if (0.5f <= stateTime) {
@@ -767,16 +797,7 @@ void oskn_App_update(oskn_App* self) {
 				app_g.enemyAddCount = 0;
 				app_g.enemyAddCountMax = 32;
 
-				oskn_Vec2 areaCenter = oskn_Rect_center(&self->areaRect);
-				oskn_Obj obj = { 0 };
-				obj.type = oskn_ObjType_Player;
-				obj.collider.radius = 12.0f;
-				obj.onHit = oskn_Player_onHit;
-				obj.player.hp = 1.0f;
-				oskn_Vec2_init(&obj.transform.position, areaCenter.x, areaCenter.y);
-				obj.player.shotInterval = 0.1f;
-
-				self->playerId = oskn_ObjList_add(&app_g.objList, &obj);
+				oskn_App_createPlayer(self);
 			}
 
 			if (1.0f <= stateTime) {
@@ -932,7 +953,7 @@ void draw(HWND hWnd) {
 		DeleteObject(hBrash);
 	}
 
-	wsprintf(str, TEXT("F %d T %d"), app_g.time.frameCount, (int)(app_g.time.time * 100));
+	wsprintf(str, TEXT("F %d T %d"), app_g.time.frameCount, (int)(app_g.time.time * 100) );
 	TextOut(hdc, 10, 10, str, lstrlen(str));
 
 	SIZE textSize;
@@ -990,12 +1011,25 @@ void draw(HWND hWnd) {
 	case oskn_AppState_Clear: {
 		wsprintf(str, TEXT("GAME CLEAR"));
 		GetTextExtentPoint32(hdc, str, lstrlen(str), &textSize);
-		textX = (INT32)((app_g.screenSize.x - textSize.cx) * 0.5f);
-		textY = (INT32)((app_g.screenSize.y - textSize.cy) * 0.5f);
+		textX = (INT32)(app_g.screenSize.x * 0.5f);
+		textY = (INT32)(8.0f);
 		TextOut(hdc, textX, textY, str, lstrlen(str));
 		break;
 	}
 	}
+
+	{
+		oskn_Obj* player = oskn_ObjList_get(&app_g.objList, app_g.playerId);
+		if (NULL != player) {
+			float fuelRest = player->player.shotFuelRest;
+			GetTextExtentPoint32(hdc, str, lstrlen(str), &textSize);
+			wsprintf(str, TEXT("FUEL %d"), (int)fuelRest);
+			textX = (INT32)((app_g.screenSize.x - textSize.cx) * 0.5f);
+			textY = (INT32)((app_g.screenSize.y - textSize.cy) * 0.5f);
+			TextOut(hdc, 10, 30, str, lstrlen(str));
+		}
+	}
+
 }
 
 LRESULT CALLBACK myWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
