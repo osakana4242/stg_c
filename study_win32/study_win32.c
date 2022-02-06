@@ -71,10 +71,16 @@ typedef struct _oskn_Enemy {
 	float speed;
 } oskn_Enemy;
 
+typedef struct _oskn_Rigidbody {
+	bool enabled;
+	oskn_Vec2 velocity;
+} oskn_Rigidbody;
+
 typedef enum _oskn_ObjType {
 	oskn_ObjType_None,
 	oskn_ObjType_Player,
 	oskn_ObjType_Enemy,
+	oskn_ObjType_Fuel,
 	oskn_ObjType_PlayerBullet,
 	oskn_ObjType_EnemyBullet,
 } oskn_ObjType;
@@ -90,6 +96,7 @@ typedef struct _oskn_Obj {
 	oskn_ObjType type;
 	oskn_Transform transform;
 	oskn_Collider collider;
+	oskn_Rigidbody rigidbody;
 	oskn_Player player;
 	oskn_Bullet bullet;
 	oskn_Enemy enemy;
@@ -204,6 +211,16 @@ void oskn_Vec2_normalize(oskn_Vec2* self) {
 	float mag = oskn_Vec2_magnitude(self);
 	self->x /= mag;
 	self->y /= mag;
+}
+
+void oskn_Vec2_addVec2(oskn_Vec2* self, const oskn_Vec2* other) {
+	self->x += other->x;
+	self->y += other->y;
+}
+
+void oskn_Vec2_mulF(oskn_Vec2* self, float f) {
+	self->x *= f;
+	self->y *= f;
 }
 
 oskn_Angle oskn_Vec2_toAngle(const oskn_Vec2* self) {
@@ -334,6 +351,7 @@ bool oskn_Obj_isNeedHitTest(const oskn_Obj* self, const oskn_Obj* other) {
 	switch (type1) {
 	case oskn_ObjType_Player:
 		switch (type2) {
+		case oskn_ObjType_Fuel:
 		case oskn_ObjType_Enemy:
 		case oskn_ObjType_EnemyBullet:
 			return true;
@@ -443,14 +461,50 @@ bool oskn_ObjList_remove(oskn_ObjList* self, int id) {
 }
 
 void oskn_Player_onHit(oskn_Obj* aObj, oskn_Obj* bObj) {
-	aObj->player.hp -= 1;
-	if (aObj->player.hp <= 0) {
-		oskn_ObjList_requestRemove(&app_g.objList, aObj->id, 0.0f);
+	switch (bObj->type) {
+	case oskn_ObjType_Fuel: {
+		float nextFuel = aObj->player.shotFuelRest + aObj->player.shotFuelConsume;
+		nextFuel = min(aObj->player.shotFuelCapacity2, nextFuel);
+		aObj->player.shotFuelRest = nextFuel;
+		break;
 	}
+	default: {
+		aObj->player.hp -= 1;
+		if (aObj->player.hp <= 0) {
+			oskn_ObjList_requestRemove(&app_g.objList, aObj->id, 0.0f);
+		}
+		break;
+	}
+	}
+}
+
+void oskn_Fuel_onHit(oskn_Obj* aObj, oskn_Obj* bObj) {
+	oskn_ObjList_requestRemove(&app_g.objList, aObj->id, 0.0f);
 }
 
 void oskn_PlayerBullet_onHit(oskn_Obj* aObj, oskn_Obj* bObj) {
 	oskn_ObjList_requestRemove(&app_g.objList, aObj->id, 0.0f);
+	
+	for (int i = 0; i < 4; ++i) {
+		oskn_Obj fuel = { 0 };
+		fuel.collider.radius = 3.0f;
+		fuel.type = oskn_ObjType_Fuel;
+		fuel.onHit = oskn_Fuel_onHit;
+		oskn_Vec2 pos = aObj->transform.position;
+		oskn_Vec2 vec;
+		vec.x = -1.0f + 2.0f * rand() / RAND_MAX;
+		vec.y = -1.0f + 2.0f * rand() / RAND_MAX;
+		oskn_Vec2_normalize(&vec);
+		fuel.transform.rotation = oskn_Vec2_toAngle(&vec);
+		fuel.transform.position = pos;
+
+		oskn_Vec2 vel = vec;
+		float speed = 100.0f + 100.0f * rand() / RAND_MAX;
+		oskn_Vec2_mulF(&vel, speed);
+		fuel.rigidbody.enabled = true;
+		fuel.rigidbody.velocity = vel;
+		oskn_ObjList_add(&app_g.objList, &fuel);
+	}
 }
 
 void oskn_Enemy_onHit(oskn_Obj* aObj, oskn_Obj* bObj) {
@@ -691,7 +745,27 @@ void oskn_App_updateObj(oskn_App* self) {
 			obj->transform.rotation = oskn_Vec2_toAngle(&vec);
 			break;
 		}
+		case oskn_ObjType_Fuel: {
+			// 時間経過で消滅.
+			float aliveTime = app_g.time.time - obj->spawnedTime;
+			if (1.0f <= aliveTime) {
+				oskn_ObjList_requestRemove(&app_g.objList, id, 0.0f);
+			}
+			break;
 		}
+		}
+	}
+
+	// rigidbody.
+	for (int i = 0, iCount = objList->count; i < iCount; ++i) {
+		int aId = objList->activeList[i];
+		oskn_Obj* aObj = oskn_ObjList_get(objList, aId);
+		if (!aObj->rigidbody.enabled) continue;
+		oskn_Vec2 pos = aObj->transform.position;
+		oskn_Vec2 v = aObj->rigidbody.velocity;
+		oskn_Vec2_mulF(&v, app_g.time.deltaTime);
+		oskn_Vec2_addVec2(&pos, &v);
+		aObj->transform.position = pos;
 	}
 
 	// 衝突判定.
@@ -924,17 +998,20 @@ void draw(HWND hWnd) {
 	SelectObject(hdc, GetStockObject(WHITE_BRUSH));
 	for (int i = 0, iCount = app_g.objList.count; i < iCount; ++i) {
 		int id = app_g.objList.activeList[i];
-		oskn_Obj obj = *oskn_ObjList_get(&app_g.objList, id);
+		oskn_Obj* obj = oskn_ObjList_get(&app_g.objList, id);
 		POINT pt;
-		pt.x = (int)obj.transform.position.x;
-		pt.y = (int)obj.transform.position.y;
+		pt.x = (int)obj->transform.position.x;
+		pt.y = (int)obj->transform.position.y;
 //		TextOut(hdc, pt.x, pt.y, lptStr, lstrlen(lptStr));
 		RECT rc;
 		COLORREF rgb;
-		switch (obj.type) {
+		switch (obj->type) {
 		case oskn_ObjType_Player:
 		case oskn_ObjType_PlayerBullet:
 			rgb = RGB(0x80, 0x00, 0xff);
+			break;
+		case oskn_ObjType_Fuel:
+			rgb = RGB(0x80, 0x80, 0xff);
 			break;
 		case oskn_ObjType_Enemy:
 		case oskn_ObjType_EnemyBullet:
@@ -944,10 +1021,10 @@ void draw(HWND hWnd) {
 			rgb = RGB(0xff, 0x00, 0xff);
 			break;
 		}
-		rc.left = (int)pt.x - 12;
-		rc.top = (int)pt.y - 12;
-		rc.right = rc.left + 24;
-		rc.bottom = rc.top + 24;
+		rc.left   = (int)(pt.x - obj->collider.radius);
+		rc.top    = (int)(pt.y - obj->collider.radius);
+		rc.right  = (int)(rc.left + (obj->collider.radius * 2.0f));
+		rc.bottom = (int)(rc.top  + (obj->collider.radius * 2.0f));
 		HBRUSH hBrash = CreateSolidBrush(rgb);
 		FillRect(hdc, &rc, hBrash);
 		DeleteObject(hBrash);
