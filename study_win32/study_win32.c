@@ -48,7 +48,8 @@ typedef struct _oskn_Collider {
 
 typedef struct _oskn_Player {
 	float hp;
-	float shotInterval;
+	float shotInterval1;
+	float shotInterval2;
 	float shotStartTime;
 	/// <summary>ショット1発に必要な燃料量</summary>
 	float shotFuelConsume;
@@ -62,6 +63,8 @@ typedef struct _oskn_Player {
 } oskn_Player;
 
 typedef struct _oskn_Bullet {
+	/// <summary>レベル. 色が変わるだけ</summary>
+	UINT8 lv;
 	float damage;
 	float speed;
 } oskn_Bullet;
@@ -169,6 +172,18 @@ bool oskn_Float_roundEq(float a, float b, float threshold) {
 	return -threshold <= d && d <= threshold;
 }
 
+float oskn_Float_moveTowards(float current, float target, float maxDelta) {
+	float delta = target - current;
+	if (0.0f < delta) {
+		delta = min(maxDelta, delta);
+	}
+	else {
+		delta = max(-maxDelta, delta);
+	}
+	current += delta;
+	return current;
+}
+
 float oskn_Angle_toRad(oskn_Angle* self) {
 	return (*self) * DEG_TO_RAD;
 }
@@ -213,6 +228,12 @@ void oskn_Vec2_normalize(oskn_Vec2* self) {
 	self->y /= mag;
 }
 
+oskn_Vec2 oskn_Vec2_normalized(oskn_Vec2* self) {
+	oskn_Vec2 other = *self;
+	oskn_Vec2_normalize(&other);
+	return other;
+}
+
 void oskn_Vec2_addVec2(oskn_Vec2* self, const oskn_Vec2* other) {
 	self->x += other->x;
 	self->y += other->y;
@@ -229,6 +250,34 @@ oskn_Angle oskn_Vec2_toAngle(const oskn_Vec2* self) {
 	return oskn_AngleUtil_fromRad( rad );
 }
 
+
+oskn_Vec2 oskn_Vec2Util_addVec2(oskn_Vec2 a, oskn_Vec2 b) {
+	a.x += b.x;
+	a.y += b.y;
+	return a;
+}
+
+oskn_Vec2 oskn_Vec2Util_subVec2(oskn_Vec2 a, oskn_Vec2 b) {
+	a.x -= b.x;
+	a.y -= b.y;
+	return a;
+}
+
+oskn_Vec2 oskn_Vec2Util_mulF(oskn_Vec2 a, float f) {
+	a.x *= f;
+	a.y *= f;
+	return a;
+}
+
+oskn_Vec2 oskn_Vec2Util_moveTowards(oskn_Vec2 current, oskn_Vec2 target, float maxDelta) {
+	oskn_Vec2 deltaVec = oskn_Vec2Util_subVec2(target, current);
+	oskn_Vec2 v = oskn_Vec2_normalized(&deltaVec);
+	float distance = oskn_Vec2_magnitude(&deltaVec);
+	float deltaF = (maxDelta < distance) ? maxDelta : distance;
+	v = oskn_Vec2Util_mulF(v, deltaF);
+	current = oskn_Vec2Util_addVec2(current, v);
+	return current;
+}
 
 oskn_Vec2 oskn_Vec2Util_fromAngle(oskn_Angle angle) {
 	float rad = oskn_Angle_toRad(&angle);
@@ -622,8 +671,15 @@ void oskn_App_updateObj(oskn_App* self) {
 				if (0.0f < obj->player.shotStartTime) {
 					float time = app_g.time.time - obj->player.shotStartTime;
 					float prevTime = time - app_g.time.deltaTime;
-					INT32 count1 = (time == 0.0f) ? -1 : (INT32)(prevTime / obj->player.shotInterval);
-					INT32 count2 = (INT32)(time / obj->player.shotInterval);
+					// 射撃間隔.
+					// 燃料が一定量あると間隔が短くなる.
+					INT32 shotLv = (obj->player.shotFuelCapacity1 < obj->player.shotFuelRest) ? 2 : 1;
+					float shotInterval = shotLv < 2 ?
+						obj->player.shotInterval1 :
+						obj->player.shotInterval2;
+
+					INT32 count1 = (time == 0.0f) ? -1 : (INT32)(prevTime / shotInterval);
+					INT32 count2 = (INT32)(time / shotInterval);
 					if (count1 < count2) {
 						float nextFuel = obj->player.shotFuelRest - obj->player.shotFuelConsume;
 						bool hasFuel = 0 <= nextFuel;
@@ -633,6 +689,7 @@ void oskn_App_updateObj(oskn_App* self) {
 							oskn_Obj bullet = { 0 };
 							bullet.type = oskn_ObjType_PlayerBullet;
 							bullet.onHit = oskn_PlayerBullet_onHit;
+							bullet.bullet.lv = shotLv;
 							bullet.bullet.damage = 1.0f;
 							bullet.bullet.speed = 400.0f;
 							bullet.collider.radius = 8.0f;
@@ -746,9 +803,35 @@ void oskn_App_updateObj(oskn_App* self) {
 			break;
 		}
 		case oskn_ObjType_Fuel: {
+			oskn_Obj* player = oskn_ObjList_get(&app_g.objList, app_g.playerId);
+			if (NULL != player && 0.0f < player->player.hp) {
+				// プレイヤーに吸い込まれる軌道.
+				// プレイヤーに近いほど吸い込まれる力が強くなる.
+				oskn_Vec2 toTargetVec = oskn_Vec2Util_subVec2(player->transform.position, obj->transform.position);
+				float distance = oskn_Vec2_magnitude(&toTargetVec);
+				float nearDistance = 24.0f;
+				float farDistance = 96.0f;
+				if (distance < farDistance) {
+					distance = max(nearDistance, distance);
+					oskn_Vec2 targetVelocity = oskn_Vec2_normalized(&toTargetVec);
+					{
+						// 遠い: 0.0, 近い: 1.0
+						float rate = 1.0f - ((distance - nearDistance) / (farDistance - nearDistance));
+						// 吸引力.
+						float speed = 200.0f * rate;
+						targetVelocity = oskn_Vec2Util_mulF(targetVelocity, speed);
+					}
+
+					oskn_Vec2 velocity = obj->rigidbody.velocity;
+					velocity = oskn_Vec2Util_moveTowards(velocity, targetVelocity, 500.0f * app_g.time.deltaTime);
+
+					obj->rigidbody.velocity = velocity;
+				}
+			}
+
 			// 時間経過で消滅.
 			float aliveTime = app_g.time.time - obj->spawnedTime;
-			if (1.0f <= aliveTime) {
+			if (0.5f <= aliveTime) {
 				oskn_ObjList_requestRemove(&app_g.objList, id, 0.0f);
 			}
 			break;
@@ -812,7 +895,8 @@ void oskn_App_createPlayer(oskn_App* self) {
 	obj.onHit = oskn_Player_onHit;
 	obj.player.hp = 1.0f;
 	oskn_Vec2_init(&obj.transform.position, areaCenter.x, areaCenter.y);
-	obj.player.shotInterval = 0.1f;
+	obj.player.shotInterval1 = 0.1f;
+	obj.player.shotInterval2 = 0.05f;
 	obj.player.shotFuelCapacity1 = 100;
 	obj.player.shotFuelCapacity2 = 200;
 	obj.player.shotFuelRest = obj.player.shotFuelCapacity1;
@@ -1007,8 +1091,12 @@ void draw(HWND hWnd) {
 		COLORREF rgb;
 		switch (obj->type) {
 		case oskn_ObjType_Player:
-		case oskn_ObjType_PlayerBullet:
 			rgb = RGB(0x80, 0x00, 0xff);
+			break;
+		case oskn_ObjType_PlayerBullet:
+			rgb = (obj->bullet.lv < 2) ?
+				RGB(0x80, 0x00, 0xff) :
+				RGB(0xc0, 0x80, 0xff);
 			break;
 		case oskn_ObjType_Fuel:
 			rgb = RGB(0x80, 0x80, 0xff);
