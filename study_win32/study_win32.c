@@ -1077,6 +1077,14 @@ void draw(HWND hWnd) {
 	SetBkColor(hdc, RGB(0xff, 0xff, 0xff));
 	SetBkMode(hdc, OPAQUE);
 
+	HFONT hFont = CreateFont(
+		16, 0, 0, 0, FW_NORMAL, false, false, false,
+		ANSI_CHARSET, OUT_DEFAULT_PRECIS,
+		CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY,
+		FIXED_PITCH | FF_MODERN, TEXT("ＭＳ ゴシック")
+	);
+	SelectObject(hdc, hFont);
+
 	SelectObject(hdc, GetStockObject(BLACK_BRUSH));
 	Rectangle(hdc, rcClient.left, rcClient.top, rcClient.right, rcClient.bottom);
 	SelectObject(hdc, GetStockObject(WHITE_BRUSH));
@@ -1117,9 +1125,6 @@ void draw(HWND hWnd) {
 		FillRect(hdc, &rc, hBrash);
 		DeleteObject(hBrash);
 	}
-
-	wsprintf(str, TEXT("F %d T %d"), app_g.time.frameCount, (int)(app_g.time.time * 100) );
-	TextOut(hdc, 10, 10, str, lstrlen(str));
 
 	SIZE textSize;
 	INT32 textX;
@@ -1176,8 +1181,8 @@ void draw(HWND hWnd) {
 	case oskn_AppState_Clear: {
 		wsprintf(str, TEXT("GAME CLEAR"));
 		GetTextExtentPoint32(hdc, str, lstrlen(str), &textSize);
-		textX = (INT32)(app_g.screenSize.x * 0.5f);
-		textY = (INT32)(8.0f);
+		textX = (INT32)((app_g.screenSize.x - textSize.cx) * 0.5f);
+		textY = (INT32)((app_g.screenSize.y - textSize.cy) * 0.5f);
 		TextOut(hdc, textX, textY, str, lstrlen(str));
 		break;
 	}
@@ -1185,16 +1190,44 @@ void draw(HWND hWnd) {
 
 	{
 		oskn_Obj* player = oskn_ObjList_get(&app_g.objList, app_g.playerId);
-		if (NULL != player) {
+		if (NULL != player && 0 < player->player.hp) {
 			float fuelRest = player->player.shotFuelRest;
+			// [        ]
+			// [::::    ]
+			// [::::::::]
+			// [####::::]
+			// [########]
+			TCHAR gaugeStr[128] = { 0 };
+			float cap1 = player->player.shotFuelCapacity1;
+			float cap2 = player->player.shotFuelCapacity2;
+			float barCount = 8;
+			for (int i = 0; i < barCount; ++i) {
+				float a = (i + 1) * cap1 / barCount;
+				float b = cap1 + ((i + 1) * (cap2 - cap1) / barCount);
+				PTCHAR c = (fuelRest < a) ?
+					TEXT(" ") :
+					(fuelRest < b) ?
+						TEXT(":") :
+						TEXT("#");
+				lstrcat(gaugeStr, c);
+			}
+			wsprintf(str, TEXT("FUEL %3d [%s]"), (int)fuelRest, gaugeStr);
+
+//			wsprintf(str, TEXT("FUEL %d"), (int)fuelRest);
 			GetTextExtentPoint32(hdc, str, lstrlen(str), &textSize);
-			wsprintf(str, TEXT("FUEL %d"), (int)fuelRest);
-			textX = (INT32)((app_g.screenSize.x - textSize.cx) * 0.5f);
-			textY = (INT32)((app_g.screenSize.y - textSize.cy) * 0.5f);
-			TextOut(hdc, 10, 30, str, lstrlen(str));
+			textX = (INT32)(app_g.screenSize.x * 0.5f);
+			textY = (INT32)(8.0f);
+
+			TextOut(hdc, textX, textY, str, lstrlen(str));
+
 		}
+
+		wsprintf(str, TEXT("F %d T %d"), app_g.time.frameCount, (int)(app_g.time.time * 100));
+		TextOut(hdc, 8, 10, str, lstrlen(str));
 	}
 
+	SelectObject(hdc, GetStockObject(SYSTEM_FONT));
+	DeleteObject(hFont);
 }
 
 LRESULT CALLBACK myWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
