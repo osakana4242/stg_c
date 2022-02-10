@@ -184,15 +184,15 @@ float oskn_Float_moveTowards(float current, float target, float maxDelta) {
 	return current;
 }
 
-float oskn_Angle_toRad(oskn_Angle* self) {
-	return (*self) * DEG_TO_RAD;
+float oskn_Angle_toRad(oskn_Angle self) {
+	return (self) * DEG_TO_RAD;
 }
 
-float oskn_Angle_toDeg(oskn_Angle* self) {
-	return *self;
+float oskn_Angle_toDeg(oskn_Angle self) {
+	return self;
 }
 
-float oskn_AngleUtil_fromRad(float rad) {
+oskn_Angle oskn_AngleUtil_fromRad(float rad) {
 	return rad * RAD_TO_DEG;
 }
 
@@ -204,52 +204,48 @@ void oskn_Time_add(oskn_Time* self, float deltaTime) {
 }
 
 
-void oskn_Vec2_init(oskn_Vec2* self, float x, float y) {
-	self->x = x;
-	self->y = y;
+bool oskn_Vec2_eq(oskn_Vec2 a, oskn_Vec2 b) {
+	return a.x == b.x && a.y == b.y;
 }
 
-bool oskn_Vec2_isZero(const oskn_Vec2* self) {
-	return self->x == 0.0f && self->y == 0.0f;
+bool oskn_Vec2_roundEq(oskn_Vec2 a, oskn_Vec2 b, float threshold) {
+	return
+		oskn_Float_roundEq(a.x, b.x, threshold) &&
+		oskn_Float_roundEq(a.y, b.y, threshold);
 }
 
- float oskn_Vec2_sqrMagnitude(const oskn_Vec2* self) {
-	return self->x * self->x + self->y * self->y;
+bool oskn_Vec2_isZero(oskn_Vec2 self) {
+	return self.x == 0.0f && self.y == 0.0f;
 }
 
-float oskn_Vec2_magnitude(const oskn_Vec2* self) {
+float oskn_Vec2_sqrMagnitude(oskn_Vec2 self) {
+	return self.x * self.x + self.y * self.y;
+}
+
+float oskn_Vec2_magnitude(oskn_Vec2 self) {
 	return sqrtf(oskn_Vec2_sqrMagnitude(self));
 }
 
-void oskn_Vec2_normalize(oskn_Vec2* self) {
-	if (self->x == 0 && self->y == 0) return;
+oskn_Vec2 oskn_Vec2_normalize(oskn_Vec2 self) {
+	if (self.x == 0 && self.y == 0) return self;
 	float mag = oskn_Vec2_magnitude(self);
-	self->x /= mag;
-	self->y /= mag;
+	self.x /= mag;
+	self.y /= mag;
+	return self;
 }
 
-oskn_Vec2 oskn_Vec2_normalized(oskn_Vec2* self) {
-	oskn_Vec2 other = *self;
-	oskn_Vec2_normalize(&other);
-	return other;
+oskn_Angle oskn_Vec2_toAngle(oskn_Vec2 self) {
+	if (self.x == 0 && self.y == 0) return 0.0f;
+	float rad = atan2f(self.y, self.x);
+	return oskn_AngleUtil_fromRad(rad);
 }
 
-void oskn_Vec2_addVec2(oskn_Vec2* self, const oskn_Vec2* other) {
-	self->x += other->x;
-	self->y += other->y;
+oskn_Vec2 oskn_Vec2Util_create(float x, float y) {
+	oskn_Vec2 vec;
+	vec.x = x;
+	vec.y = y;
+	return vec;
 }
-
-void oskn_Vec2_mulF(oskn_Vec2* self, float f) {
-	self->x *= f;
-	self->y *= f;
-}
-
-oskn_Angle oskn_Vec2_toAngle(const oskn_Vec2* self) {
-	if (self->x == 0 && self->y == 0) return 0.0f;
-	float rad = atan2f(self->y, self->x);
-	return oskn_AngleUtil_fromRad( rad );
-}
-
 
 oskn_Vec2 oskn_Vec2Util_addVec2(oskn_Vec2 a, oskn_Vec2 b) {
 	a.x += b.x;
@@ -271,8 +267,8 @@ oskn_Vec2 oskn_Vec2Util_mulF(oskn_Vec2 a, float f) {
 
 oskn_Vec2 oskn_Vec2Util_moveTowards(oskn_Vec2 current, oskn_Vec2 target, float maxDelta) {
 	oskn_Vec2 deltaVec = oskn_Vec2Util_subVec2(target, current);
-	oskn_Vec2 v = oskn_Vec2_normalized(&deltaVec);
-	float distance = oskn_Vec2_magnitude(&deltaVec);
+	oskn_Vec2 v = oskn_Vec2_normalize(deltaVec);
+	float distance = oskn_Vec2_magnitude(deltaVec);
 	float deltaF = (maxDelta < distance) ? maxDelta : distance;
 	v = oskn_Vec2Util_mulF(v, deltaF);
 	current = oskn_Vec2Util_addVec2(current, v);
@@ -280,50 +276,36 @@ oskn_Vec2 oskn_Vec2Util_moveTowards(oskn_Vec2 current, oskn_Vec2 target, float m
 }
 
 oskn_Vec2 oskn_Vec2Util_fromAngle(oskn_Angle angle) {
-	float rad = oskn_Angle_toRad(&angle);
+	float rad = oskn_Angle_toRad(angle);
 	oskn_Vec2 vec;
 	vec.x = cosf(rad);
 	vec.y = sinf(rad);
 	return vec;
 }
 
-bool oskn_Vec2Util_eq(const oskn_Vec2* a, const oskn_Vec2* b) {
-	return a->x == b->x && a->y == b->y;
+
+oskn_Vec2 oskn_Rect_min(oskn_Rect self) {
+	return oskn_Vec2Util_create(self.x, self.y);
 }
 
-bool oskn_Vec2Util_roundEq(const oskn_Vec2* a, const oskn_Vec2* b, float threshold) {
-	return
-		oskn_Float_roundEq(a->x, b->x, threshold) &&
-		oskn_Float_roundEq(a->y, b->y, threshold);
+oskn_Vec2 oskn_Rect_max(oskn_Rect self) {
+	return oskn_Vec2Util_create(self.x + self.width, self.y + self.height);
 }
 
-
-void oskn_Rect_init(oskn_Rect* self, float x, float y, float width, float height) {
-	self->x = x;
-	self->y = y;
-	self->width = width;
-	self->height = height;
-}
-
-oskn_Vec2 oskn_Rect_min(const oskn_Rect* self) {
-	oskn_Vec2 vec;
-	oskn_Vec2_init(&vec, self->x, self->y);
-	return vec;
-}
-
-oskn_Vec2 oskn_Rect_max(const oskn_Rect* self) {
-	oskn_Vec2 vec;
-	oskn_Vec2_init(&vec, self->x + self->width, self->y + self->height);
-	return vec;
-}
-
-oskn_Vec2 oskn_Rect_center(const oskn_Rect* self) {
-	oskn_Vec2 vec;
-	oskn_Vec2_init(&vec,
-		self->x + self->width * 0.5f,
-		self->y + self->height * 0.5f
+oskn_Vec2 oskn_Rect_center(oskn_Rect self) {
+	return oskn_Vec2Util_create(
+		self.x + self.width * 0.5f,
+		self.y + self.height * 0.5f
 	);
-	return vec;
+}
+
+oskn_Rect oskn_RectUtil_create(float x, float y, float width, float height) {
+	oskn_Rect self;
+	self.x = x;
+	self.y = y;
+	self.width = width;
+	self.height = height;
+	return self;
 }
 
 
@@ -366,8 +348,7 @@ bool oskn_Input_hasKeyUp(const oskn_Input* self, oskn_Key key) {
 }
 
 oskn_Vec2 oskn_Input_getDirection(const oskn_Input* self) {
-	oskn_Vec2 vec;
-	oskn_Vec2_init(&vec, 0.0f, 0.0f);
+	oskn_Vec2 vec = oskn_Vec2Util_create(0.0f, 0.0f);
 	if (oskn_Input_hasKey(self, OSKN_KEY_LEFT)) {
 		vec.x = -1.0f;
 	} else if (oskn_Input_hasKey(self, OSKN_KEY_RIGHT)) {
@@ -381,7 +362,7 @@ oskn_Vec2 oskn_Input_getDirection(const oskn_Input* self) {
 	}
 
 	if (vec.x != 0.0f && vec.y != 0.0f) {
-		oskn_Vec2_normalize(&vec);
+		vec = oskn_Vec2_normalize(vec);
 	}
 
 	return vec;
@@ -543,13 +524,12 @@ void oskn_PlayerBullet_onHit(oskn_Obj* aObj, oskn_Obj* bObj) {
 		oskn_Vec2 vec;
 		vec.x = -1.0f + 2.0f * rand() / RAND_MAX;
 		vec.y = -1.0f + 2.0f * rand() / RAND_MAX;
-		oskn_Vec2_normalize(&vec);
-		fuel.transform.rotation = oskn_Vec2_toAngle(&vec);
+		vec = oskn_Vec2_normalize(vec);
+		fuel.transform.rotation = oskn_Vec2_toAngle(vec);
 		fuel.transform.position = pos;
 
-		oskn_Vec2 vel = vec;
 		float speed = 100.0f + 100.0f * rand() / RAND_MAX;
-		oskn_Vec2_mulF(&vel, speed);
+		oskn_Vec2 vel = oskn_Vec2Util_mulF(vec, speed);
 		fuel.rigidbody.enabled = true;
 		fuel.rigidbody.velocity = vel;
 		oskn_ObjList_add(&app_g.objList, &fuel);
@@ -570,45 +550,40 @@ void oskn_App_test(oskn_App* self) {
 		oskn_Vec2 expected;
 		oskn_Vec2 actual;
 
-		oskn_Vec2_init(&expected, 1.0f, 0.0f);
+		expected = oskn_Vec2Util_create(1.0f, 0.0f);
 		actual = oskn_Vec2Util_fromAngle(0);
-		assert(oskn_Vec2Util_eq(&expected, &actual));
+		assert(oskn_Vec2_eq(expected, actual));
 
-		oskn_Vec2_init(&expected, 0.0f, 1.0f);
+		expected = oskn_Vec2Util_create(0.0f, 1.0f);
 		actual = oskn_Vec2Util_fromAngle(90);
-		assert(oskn_Vec2Util_roundEq(&expected, &actual, 0.01f));
+		assert(oskn_Vec2_roundEq(expected, actual, 0.01f));
 
-		oskn_Vec2_init(&expected, -1.0f, 0.0f);
+		expected = oskn_Vec2Util_create(-1.0f, 0.0f);
 		actual = oskn_Vec2Util_fromAngle(180);
-		assert(oskn_Vec2Util_roundEq(&expected, &actual, 0.01f));
+		assert(oskn_Vec2_roundEq(expected, actual, 0.01f));
 
-		oskn_Vec2_init(&expected, 0.0f, -1.0f);
+		expected = oskn_Vec2Util_create(0.0f, -1.0f);
 		actual = oskn_Vec2Util_fromAngle(-90);
-		assert(oskn_Vec2Util_roundEq(&expected, &actual, 0.01f));
+		assert(oskn_Vec2_roundEq(expected, actual, 0.01f));
 	}
 	{
-		oskn_Vec2 vec;
 		oskn_Angle expected;
 		oskn_Angle actual;
 
 		expected = 0.0f;
-		oskn_Vec2_init(&vec, 1.0f, 0.0f);
-		actual = oskn_Vec2_toAngle(&vec);
+		actual = oskn_Vec2_toAngle(oskn_Vec2Util_create(1.0f, 0.0f));
 		assert(oskn_Float_roundEq(expected, actual, 0.01f));
 
 		expected = 90.0f;
-		oskn_Vec2_init(&vec, 0.0f, 1.0f);
-		actual = oskn_Vec2_toAngle(&vec);
+		actual = oskn_Vec2_toAngle(oskn_Vec2Util_create(0.0f, 1.0f));
 		assert(oskn_Float_roundEq(expected, actual, 0.01f));
 
 		expected = 180.0f;
-		oskn_Vec2_init(&vec, -1.0f, 0.0f);
-		actual = oskn_Vec2_toAngle(&vec);
+		actual = oskn_Vec2_toAngle(oskn_Vec2Util_create(-1.0f, 0.0f));
 		assert(oskn_Float_roundEq(expected, actual, 0.01f));
 
 		expected = -90.0f;
-		oskn_Vec2_init(&vec, 0.0f, -1.0f);
-		actual = oskn_Vec2_toAngle(&vec);
+		actual = oskn_Vec2_toAngle(oskn_Vec2Util_create(0.0f, -1.0f));
 		assert(oskn_Float_roundEq(expected, actual, 0.01f));
 	}
 }
@@ -702,7 +677,7 @@ void oskn_App_updateObj(oskn_App* self) {
 			}
 
 
-			if (!oskn_Vec2_isZero(&inputDir)) {
+			if (!oskn_Vec2_isZero(inputDir)) {
 				oskn_Vec2 pos = obj->transform.position;
 				oskn_Vec2 move;
 				float speed = 100.0f * app_g.time.deltaTime;
@@ -712,8 +687,8 @@ void oskn_App_updateObj(oskn_App* self) {
 				pos.y += move.y;
 
 
-				oskn_Vec2 rectMin = oskn_Rect_min(&app_g.areaRect);
-				oskn_Vec2 rectMax = oskn_Rect_max(&app_g.areaRect);
+				oskn_Vec2 rectMin = oskn_Rect_min(app_g.areaRect);
+				oskn_Vec2 rectMax = oskn_Rect_max(app_g.areaRect);
 				if (pos.x - obj->collider.radius < rectMin.x) {
 					pos.x = rectMin.x + obj->collider.radius;
 				}
@@ -729,7 +704,7 @@ void oskn_App_updateObj(oskn_App* self) {
 				}
 
 				if (!oskn_Input_hasKey(&app_g.input, OSKN_KEY_FIX)) {
-					obj->transform.rotation = oskn_Vec2_toAngle(&move);
+					obj->transform.rotation = oskn_Vec2_toAngle(move);
 				}
 
 				obj->transform.position = pos;
@@ -744,8 +719,8 @@ void oskn_App_updateObj(oskn_App* self) {
 			oskn_Vec2 pos = obj->transform.position;
 			pos.x += vec.x;
 			pos.y += vec.y;
-			oskn_Vec2 rectMin = oskn_Rect_min(&app_g.areaRect);
-			oskn_Vec2 rectMax = oskn_Rect_max(&app_g.areaRect);
+			oskn_Vec2 rectMin = oskn_Rect_min(app_g.areaRect);
+			oskn_Vec2 rectMax = oskn_Rect_max(app_g.areaRect);
 
 			bool isOutside = false;
 			if (pos.x - obj->collider.radius < rectMin.x) {
@@ -767,7 +742,7 @@ void oskn_App_updateObj(oskn_App* self) {
 			}
 
 			obj->transform.position = pos;
-			obj->transform.rotation = oskn_Vec2_toAngle(&vec);
+			obj->transform.rotation = oskn_Vec2_toAngle(vec);
 			break;
 		}
 		case oskn_ObjType_Enemy: {
@@ -778,8 +753,8 @@ void oskn_App_updateObj(oskn_App* self) {
 			oskn_Vec2 pos = obj->transform.position;
 			pos.x += vec.x;
 			pos.y += vec.y;
-			oskn_Vec2 rectMin = oskn_Rect_min(&app_g.areaRect);
-			oskn_Vec2 rectMax = oskn_Rect_max(&app_g.areaRect);
+			oskn_Vec2 rectMin = oskn_Rect_min(app_g.areaRect);
+			oskn_Vec2 rectMax = oskn_Rect_max(app_g.areaRect);
 
 			if (pos.x - obj->collider.radius < rectMin.x) {
 				vec.x *= -1;
@@ -799,7 +774,7 @@ void oskn_App_updateObj(oskn_App* self) {
 				pos.y = rectMax.y - obj->collider.radius;
 			}
 			obj->transform.position = pos;
-			obj->transform.rotation = oskn_Vec2_toAngle(&vec);
+			obj->transform.rotation = oskn_Vec2_toAngle(vec);
 			break;
 		}
 		case oskn_ObjType_Fuel: {
@@ -808,12 +783,12 @@ void oskn_App_updateObj(oskn_App* self) {
 				// プレイヤーに吸い込まれる軌道.
 				// プレイヤーに近いほど吸い込まれる力が強くなる.
 				oskn_Vec2 toTargetVec = oskn_Vec2Util_subVec2(player->transform.position, obj->transform.position);
-				float distance = oskn_Vec2_magnitude(&toTargetVec);
+				float distance = oskn_Vec2_magnitude(toTargetVec);
 				float nearDistance = 24.0f;
 				float farDistance = 96.0f;
 				if (distance < farDistance) {
 					distance = max(nearDistance, distance);
-					oskn_Vec2 targetVelocity = oskn_Vec2_normalized(&toTargetVec);
+					oskn_Vec2 targetVelocity = oskn_Vec2_normalize(toTargetVec);
 					{
 						// 遠い: 0.0, 近い: 1.0
 						float rate = 1.0f - ((distance - nearDistance) / (farDistance - nearDistance));
@@ -845,9 +820,8 @@ void oskn_App_updateObj(oskn_App* self) {
 		oskn_Obj* aObj = oskn_ObjList_get(objList, aId);
 		if (!aObj->rigidbody.enabled) continue;
 		oskn_Vec2 pos = aObj->transform.position;
-		oskn_Vec2 v = aObj->rigidbody.velocity;
-		oskn_Vec2_mulF(&v, app_g.time.deltaTime);
-		oskn_Vec2_addVec2(&pos, &v);
+		oskn_Vec2 v = oskn_Vec2Util_mulF(aObj->rigidbody.velocity, app_g.time.deltaTime);
+		pos = oskn_Vec2Util_addVec2(pos, v);
 		aObj->transform.position = pos;
 	}
 
@@ -871,7 +845,7 @@ void oskn_App_updateObj(oskn_App* self) {
 			oskn_Vec2 d;
 			d.x = bPos.x - aPos.x;
 			d.y = bPos.y - aPos.y;
-			bool isHit = oskn_Vec2_sqrMagnitude(&d) < sqrRadius;
+			bool isHit = oskn_Vec2_sqrMagnitude(d) < sqrRadius;
 			if (!isHit) continue;
 			oskn_Obj_hit(aObj, bObj);
 			oskn_Obj_hit(bObj, aObj);
@@ -888,13 +862,13 @@ void oskn_App_updateObj(oskn_App* self) {
 }
 
 void oskn_App_createPlayer(oskn_App* self) {
-	oskn_Vec2 areaCenter = oskn_Rect_center(&self->areaRect);
+	oskn_Vec2 areaCenter = oskn_Rect_center(self->areaRect);
 	oskn_Obj obj = { 0 };
 	obj.type = oskn_ObjType_Player;
 	obj.collider.radius = 12.0f;
 	obj.onHit = oskn_Player_onHit;
 	obj.player.hp = 1.0f;
-	oskn_Vec2_init(&obj.transform.position, areaCenter.x, areaCenter.y);
+	obj.transform.position = areaCenter;
 	obj.player.shotInterval1 = 0.1f;
 	obj.player.shotInterval2 = 0.05f;
 	obj.player.shotFuelCapacity1 = 100;
@@ -1025,8 +999,8 @@ void oskn_App_update(oskn_App* self) {
 			// spawn
 			oskn_Vec2 pos = { 0 };
 			int n = 4 * rand() / RAND_MAX;
-			oskn_Vec2 rectMin = oskn_Rect_min(&self->areaRect);
-			oskn_Vec2 rectMax = oskn_Rect_max(&self->areaRect);
+			oskn_Vec2 rectMin = oskn_Rect_min(self->areaRect);
+			oskn_Vec2 rectMax = oskn_Rect_max(self->areaRect);
 			switch (n) {
 			case 0:
 			case 1:
