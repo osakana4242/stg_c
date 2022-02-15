@@ -98,6 +98,8 @@ typedef struct _oskn_Bullet {
 } oskn_Bullet;
 
 typedef struct _oskn_Enemy {
+	/// <summary>1,2,3</summary>
+	UINT8 lv;
 	float hp;
 	float speed;
 } oskn_Enemy;
@@ -547,10 +549,42 @@ void oskn_PlayerBullet_onHit(oskn_Obj* aObj, oskn_Obj* bObj) {
 	}
 }
 
+// TODO: プロトタイプ宣言なくせる？ 
+// oskn_App_createEnemy
+// oskn_Enemy_onHit
+// での相互参照のためプロトタイプ宣言 
+void oskn_Enemy_onHit(oskn_Obj* aObj, oskn_Obj* bObj);
+
+oskn_Obj* oskn_App_createEnemy(oskn_App* self, oskn_Vec2 pos, UINT8 lv) {
+	oskn_Obj obj = { 0 };
+	obj.type = oskn_ObjType_Enemy;
+	obj.transform.position = pos;
+	obj.collider.radius = 12.0f * lv;
+	obj.enemy.hp = (float)(lv * 4);
+	obj.enemy.lv = lv;
+	obj.onHit = oskn_Enemy_onHit;
+
+	obj.transform.rotation = self->time.time * 10.0f;
+	obj.enemy.speed = 25.0f + 75.0f * rand() / RAND_MAX / lv;
+
+	INT32 id = oskn_ObjList_add(&app_g.objList, &obj);
+	return oskn_ObjList_get(&app_g.objList, id);
+}
+
 void oskn_Enemy_onHit(oskn_Obj* aObj, oskn_Obj* bObj) {
 	if (bObj->type == oskn_ObjType_PlayerBullet) {
 		aObj->enemy.hp -= bObj->bullet.damage;
 		if (aObj->enemy.hp <= 0) {
+			if (1 < aObj->enemy.lv) {
+				for (int i = 0; i < 4; ++i) {
+					float radius = aObj->collider.radius;
+					oskn_Vec2 pos = aObj->transform.position;
+					pos.x += (i % 2) * radius * 0.5f - radius * 0.25f;
+					pos.y += (i / 2) * radius * 0.5f - radius * 0.25f;
+					oskn_App_createEnemy(&app_g, pos, aObj->enemy.lv - 1);
+				}
+			}
+
 			oskn_ObjList_requestRemove(&app_g.objList, aObj->id, 0.0f);
 		}
 	}
@@ -607,10 +641,10 @@ bool oskn_App_init(oskn_App* self, HWND hWnd) {
 	self->screenSize.y = 240;
 	self->fps = 60.0f;
 	self->frameInterval = 1.0f / self->fps;
-	self->areaRect.x = -8;
-	self->areaRect.y = -8;
-	self->areaRect.width = 320 + 16;
-	self->areaRect.height = 240 + 16;
+	self->areaRect.x = -64;
+	self->areaRect.y = -64;
+	self->areaRect.width = 320 + 128;
+	self->areaRect.height = 240 + 128;
 	HDC hdc;
 	RECT rc;
 	hdc = GetDC(hWnd);                      	// ウインドウのDCを取得
@@ -938,7 +972,7 @@ void oskn_App_update(oskn_App* self) {
 					oskn_ObjList_requestRemove(&self->objList, objId, 0.0f);
 				}
 				app_g.enemyAddCount = 0;
-				app_g.enemyAddCountMax = 32;
+				app_g.enemyAddCountMax = 8;
 
 				oskn_App_createPlayer(self);
 			}
@@ -1001,7 +1035,7 @@ void oskn_App_update(oskn_App* self) {
 
 	// 岩石の生成.
 	if (app_g.enemyAddCount < app_g.enemyAddCountMax) {
-		float spawnInterval = 0.5f;
+		float spawnInterval = 2.0f;
 		INT32 prevSec = (INT32)((self->time.time - self->frameInterval) / spawnInterval);
 		INT32 sec = (INT32)(self->time.time / spawnInterval);
 
@@ -1026,18 +1060,7 @@ void oskn_App_update(oskn_App* self) {
 				break;
 			}
 
-			oskn_Obj obj = { 0 };
-			obj.type = oskn_ObjType_Enemy;
-			obj.transform.position.x = pos.x;
-			obj.transform.position.y = pos.y;
-			obj.collider.radius = 12.0f;
-			obj.enemy.hp = 4;
-			obj.onHit = oskn_Enemy_onHit;
-
-			//		obj.transform.rotation = 360.0f * rand() / RAND_MAX;
-			obj.transform.rotation = self->time.time * 10.0f;
-			obj.enemy.speed = 25.0f + 75.0f * rand() / RAND_MAX;
-			oskn_ObjList_add(&app_g.objList, &obj);
+			oskn_Obj* obj = oskn_App_createEnemy(&app_g, pos, 3);
 
 			++app_g.enemyAddCount;
 		}
