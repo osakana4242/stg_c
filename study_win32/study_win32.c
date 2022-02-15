@@ -1,4 +1,9 @@
 ﻿
+// 岩石壊しゲーム 
+//
+// oskn は osakana4242 の略 
+// 関数プロトタイプ宣言を使わない縛り. (なんとなく見た目がスッキリする様な気がして )
+
 // // SDKDDKVer.h をインクルードすると、利用できる最も高いレベルの Windows プラットフォームが定義されます。
 // 以前の Windows プラットフォーム用にアプリケーションをビルドする場合は、WinSDKVer.h をインクルードし、
 // サポートしたいプラットフォームに _WIN32_WINNT マクロを設定してから SDKDDKVer.h をインクルードします。
@@ -16,6 +21,7 @@
 #include <math.h>
 #include <assert.h>
 
+// 型 
 
 typedef float oskn_Angle;
 
@@ -46,6 +52,28 @@ typedef struct _oskn_Collider {
 	float radius;
 } oskn_Collider;
 
+typedef struct _oskn_Rigidbody {
+	bool enabled;
+	oskn_Vec2 velocity;
+} oskn_Rigidbody;
+
+typedef enum _oskn_Key {
+	OSKN_KEY_NONE = 0,
+	OSKN_KEY_START = 1 << 0,
+	OSKN_KEY_LEFT = 1 << 1,
+	OSKN_KEY_RIGHT = 1 << 2,
+	OSKN_KEY_UP = 1 << 3,
+	OSKN_KEY_DOWN = 1 << 4,
+	OSKN_KEY_SHOT = 1 << 5,
+	OSKN_KEY_FIX = 1 << 6,
+} oskn_Key;
+
+typedef struct _oskn_Input {
+	INT32 keyStatePrev;
+	INT32 keyState;
+	INT32 keyStateNext;
+} oskn_Input;
+
 typedef struct _oskn_Player {
 	float hp;
 	float shotInterval1;
@@ -73,11 +101,6 @@ typedef struct _oskn_Enemy {
 	float hp;
 	float speed;
 } oskn_Enemy;
-
-typedef struct _oskn_Rigidbody {
-	bool enabled;
-	oskn_Vec2 velocity;
-} oskn_Rigidbody;
 
 typedef enum _oskn_ObjType {
 	oskn_ObjType_None,
@@ -114,23 +137,6 @@ typedef struct _oskn_ObjList {
 	int capacity;
 } oskn_ObjList;
 
-typedef enum _oskn_Key {
-	OSKN_KEY_NONE = 0,
-	OSKN_KEY_START = 1 << 0,
-	OSKN_KEY_LEFT  = 1 << 1,
-	OSKN_KEY_RIGHT = 1 << 2,
-	OSKN_KEY_UP    = 1 << 3,
-	OSKN_KEY_DOWN  = 1 << 4,
-	OSKN_KEY_SHOT  = 1 << 5,
-	OSKN_KEY_FIX   = 1 << 6,
-} oskn_Key;
-
-typedef struct _oskn_Input {
-	INT32 keyStatePrev;
-	INT32 keyState;
-	INT32 keyStateNext;
-} oskn_Input;
-
 typedef enum _oskn_AppState {
 	oskn_AppState_None,
 	oskn_AppState_Title,
@@ -159,6 +165,9 @@ typedef struct _oskn_App {
 	
 } oskn_App;
 
+
+// 定数、グローバル変数 
+
 #define ANGLE_PI 3.141592f
 #define DEG_TO_RAD (ANGLE_PI / 180.0f)
 #define RAD_TO_DEG (180.0f / ANGLE_PI)
@@ -166,6 +175,8 @@ typedef struct _oskn_App {
 HINSTANCE hInst_g = NULL;
 oskn_App app_g = { 0 };
 
+
+// 関数 
 
 bool oskn_Float_roundEq(float a, float b, float threshold) {
 	float d = a - b;
