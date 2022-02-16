@@ -128,8 +128,6 @@ typedef struct _oskn_Obj {
 	oskn_Player player;
 	oskn_Bullet bullet;
 	oskn_Enemy enemy;
-
-	void(*onHit)(struct _oskn_Obj* self, struct _oskn_Obj* other);
 } oskn_Obj;
 
 typedef struct _oskn_ObjList {
@@ -423,12 +421,6 @@ bool oskn_Obj_isNeedHitTest(const oskn_Obj* self, const oskn_Obj* other) {
 	}
 }
 
-void oskn_Obj_hit(oskn_Obj* self, oskn_Obj* other) {
-	if (NULL == self->onHit) return;
-	self->onHit(self, other);
-}
-
-
 bool oskn_ObjList_init(oskn_ObjList* self, int capacity) {
 	self->capacity = capacity;
 	self->totalList = calloc(self->capacity, sizeof(oskn_Obj));
@@ -503,58 +495,6 @@ bool oskn_ObjList_remove(oskn_ObjList* self, int id) {
 	return false;
 }
 
-void oskn_Player_onHit(oskn_Obj* aObj, oskn_Obj* bObj) {
-	switch (bObj->type) {
-	case oskn_ObjType_Fuel: {
-		float nextFuel = aObj->player.shotFuelRest + aObj->player.shotFuelConsume;
-		nextFuel = min(aObj->player.shotFuelCapacity2, nextFuel);
-		aObj->player.shotFuelRest = nextFuel;
-		break;
-	}
-	default: {
-		aObj->player.hp -= 1;
-		if (aObj->player.hp <= 0) {
-			oskn_ObjList_requestRemove(&app_g.objList, aObj->id, 0.0f);
-		}
-		break;
-	}
-	}
-}
-
-void oskn_Fuel_onHit(oskn_Obj* aObj, oskn_Obj* bObj) {
-	oskn_ObjList_requestRemove(&app_g.objList, aObj->id, 0.0f);
-}
-
-void oskn_PlayerBullet_onHit(oskn_Obj* aObj, oskn_Obj* bObj) {
-	oskn_ObjList_requestRemove(&app_g.objList, aObj->id, 0.0f);
-	
-	for (int i = 0; i < 4; ++i) {
-		oskn_Obj fuel = { 0 };
-		fuel.collider.radius = 3.0f;
-		fuel.type = oskn_ObjType_Fuel;
-		fuel.onHit = oskn_Fuel_onHit;
-		oskn_Vec2 pos = aObj->transform.position;
-		oskn_Vec2 vec;
-		vec.x = -1.0f + 2.0f * rand() / RAND_MAX;
-		vec.y = -1.0f + 2.0f * rand() / RAND_MAX;
-		vec = oskn_Vec2_normalize(vec);
-		fuel.transform.rotation = oskn_Vec2_toAngle(vec);
-		fuel.transform.position = pos;
-
-		float speed = 100.0f + 100.0f * rand() / RAND_MAX;
-		oskn_Vec2 vel = oskn_Vec2Util_mulF(vec, speed);
-		fuel.rigidbody.enabled = true;
-		fuel.rigidbody.velocity = vel;
-		oskn_ObjList_add(&app_g.objList, &fuel);
-	}
-}
-
-// TODO: プロトタイプ宣言なくせる？ 
-// oskn_App_createEnemy
-// oskn_Enemy_onHit
-// での相互参照のためプロトタイプ宣言 
-void oskn_Enemy_onHit(oskn_Obj* aObj, oskn_Obj* bObj);
-
 oskn_Obj* oskn_App_createEnemy(oskn_App* self, oskn_Vec2 pos, UINT8 lv) {
 	oskn_Obj obj = { 0 };
 	obj.type = oskn_ObjType_Enemy;
@@ -562,32 +502,12 @@ oskn_Obj* oskn_App_createEnemy(oskn_App* self, oskn_Vec2 pos, UINT8 lv) {
 	obj.collider.radius = 12.0f * lv;
 	obj.enemy.hp = (float)(lv * 4);
 	obj.enemy.lv = lv;
-	obj.onHit = oskn_Enemy_onHit;
 
 	obj.transform.rotation = self->time.time * 10.0f;
 	obj.enemy.speed = 25.0f + 75.0f * rand() / RAND_MAX / lv;
 
 	INT32 id = oskn_ObjList_add(&app_g.objList, &obj);
 	return oskn_ObjList_get(&app_g.objList, id);
-}
-
-void oskn_Enemy_onHit(oskn_Obj* aObj, oskn_Obj* bObj) {
-	if (bObj->type == oskn_ObjType_PlayerBullet) {
-		aObj->enemy.hp -= bObj->bullet.damage;
-		if (aObj->enemy.hp <= 0) {
-			if (1 < aObj->enemy.lv) {
-				for (int i = 0; i < 4; ++i) {
-					float radius = aObj->collider.radius;
-					oskn_Vec2 pos = aObj->transform.position;
-					pos.x += (i % 2) * radius * 0.5f - radius * 0.25f;
-					pos.y += (i / 2) * radius * 0.5f - radius * 0.25f;
-					oskn_App_createEnemy(&app_g, pos, aObj->enemy.lv - 1);
-				}
-			}
-
-			oskn_ObjList_requestRemove(&app_g.objList, aObj->id, 0.0f);
-		}
-	}
 }
 
 void oskn_App_test(oskn_App* self) {
@@ -657,6 +577,76 @@ bool oskn_App_init(oskn_App* self, HWND hWnd) {
 	return true;
 }
 
+void oskn_App_onHitObj(oskn_App* self, oskn_Obj* aObj, oskn_Obj* bObj) {
+	switch (aObj->type) {
+	case oskn_ObjType_Player: {
+		switch (bObj->type) {
+		case oskn_ObjType_Fuel: {
+			float nextFuel = aObj->player.shotFuelRest + aObj->player.shotFuelConsume;
+			nextFuel = min(aObj->player.shotFuelCapacity2, nextFuel);
+			aObj->player.shotFuelRest = nextFuel;
+			break;
+		}
+		default: {
+			aObj->player.hp -= 1;
+			if (aObj->player.hp <= 0) {
+				oskn_ObjList_requestRemove(&app_g.objList, aObj->id, 0.0f);
+			}
+			break;
+		}
+		}
+		break;
+	}
+	case oskn_ObjType_Fuel: {
+		oskn_ObjList_requestRemove(&app_g.objList, aObj->id, 0.0f);
+		break;
+	}
+	case oskn_ObjType_PlayerBullet: {
+		oskn_ObjList_requestRemove(&app_g.objList, aObj->id, 0.0f);
+		
+		for (int i = 0; i < 4; ++i) {
+			oskn_Obj fuel = { 0 };
+			fuel.collider.radius = 3.0f;
+			fuel.type = oskn_ObjType_Fuel;
+			oskn_Vec2 pos = aObj->transform.position;
+			oskn_Vec2 vec;
+			vec.x = -1.0f + 2.0f * rand() / RAND_MAX;
+			vec.y = -1.0f + 2.0f * rand() / RAND_MAX;
+			vec = oskn_Vec2_normalize(vec);
+			fuel.transform.rotation = oskn_Vec2_toAngle(vec);
+			fuel.transform.position = pos;
+
+			float speed = 100.0f + 100.0f * rand() / RAND_MAX;
+			oskn_Vec2 vel = oskn_Vec2Util_mulF(vec, speed);
+			fuel.rigidbody.enabled = true;
+			fuel.rigidbody.velocity = vel;
+			oskn_ObjList_add(&app_g.objList, &fuel);
+		}
+		break;
+	}
+	case oskn_ObjType_Enemy: {
+		if (bObj->type == oskn_ObjType_PlayerBullet) {
+			aObj->enemy.hp -= bObj->bullet.damage;
+			if (aObj->enemy.hp <= 0) {
+				if (1 < aObj->enemy.lv) {
+					for (int i = 0; i < 4; ++i) {
+						float radius = aObj->collider.radius;
+						oskn_Vec2 pos = aObj->transform.position;
+						pos.x += (i % 2) * radius * 0.5f - radius * 0.25f;
+						pos.y += (i / 2) * radius * 0.5f - radius * 0.25f;
+						oskn_App_createEnemy(&app_g, pos, aObj->enemy.lv - 1);
+					}
+				}
+
+				oskn_ObjList_requestRemove(&app_g.objList, aObj->id, 0.0f);
+			}
+		}
+		break;
+	}
+	}
+}
+
+/// <summary>更新, 移動, 衝突判定</summary>
 void oskn_App_updateObj(oskn_App* self) {
 	oskn_ObjList* objList = &self->objList;
 
@@ -708,7 +698,6 @@ void oskn_App_updateObj(oskn_App* self) {
 
 							oskn_Obj bullet = { 0 };
 							bullet.type = oskn_ObjType_PlayerBullet;
-							bullet.onHit = oskn_PlayerBullet_onHit;
 							bullet.bullet.lv = shotLv;
 							bullet.bullet.damage = 1.0f;
 							bullet.bullet.speed = 400.0f;
@@ -892,8 +881,8 @@ void oskn_App_updateObj(oskn_App* self) {
 			d.y = bPos.y - aPos.y;
 			bool isHit = oskn_Vec2_sqrMagnitude(d) < sqrRadius;
 			if (!isHit) continue;
-			oskn_Obj_hit(aObj, bObj);
-			oskn_Obj_hit(bObj, aObj);
+			oskn_App_onHitObj(self, aObj, bObj);
+			oskn_App_onHitObj(self, bObj, aObj);
 		}
 	}
 
@@ -903,7 +892,6 @@ void oskn_App_updateObj(oskn_App* self) {
 		if (obj->destroyTime < app_g.time.time) continue;
 		oskn_ObjList_remove(objList, id);
 	}
-
 }
 
 void oskn_App_createPlayer(oskn_App* self) {
@@ -911,7 +899,6 @@ void oskn_App_createPlayer(oskn_App* self) {
 	oskn_Obj obj = { 0 };
 	obj.type = oskn_ObjType_Player;
 	obj.collider.radius = 12.0f;
-	obj.onHit = oskn_Player_onHit;
 	obj.player.hp = 1.0f;
 	obj.transform.position = areaCenter;
 	obj.player.shotInterval1 = 0.1f;
