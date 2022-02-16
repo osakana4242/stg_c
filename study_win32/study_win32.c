@@ -113,11 +113,13 @@ typedef enum _oskn_ObjType {
 	oskn_ObjType_EnemyBullet,
 } oskn_ObjType;
 
+typedef INT32 oskn_ObjId;
+
 typedef struct _oskn_Obj {
 	bool destroyed;
 	/// <summary>この時間に達していたら remove する. 0 以下は無効.</summary>
 	float destroyTime;
-	INT32 id;
+	oskn_ObjId id;
 	LPCWSTR name;
 	float spawnedTime;
 
@@ -148,7 +150,7 @@ typedef enum _oskn_AppState {
 
 typedef struct _oskn_App {
 	oskn_ObjList objList;
-	int playerId;
+	oskn_ObjId playerId;
 	float fps;
 	float frameInterval;
 	oskn_Vec2 screenSize;
@@ -471,14 +473,14 @@ int oskn_ObjList_add(oskn_ObjList* self, const oskn_Obj* obj) {
 	return i;
 }
 
-bool oskn_ObjList_requestRemove(oskn_ObjList* self, INT32 id, float time) {
+bool oskn_ObjList_requestRemove(oskn_ObjList* self, oskn_ObjId id, float time) {
 	oskn_Obj* obj = oskn_ObjList_get(self, id);
 	if (NULL == obj) return false;
 	obj->destroyTime = app_g.time.time + time;
 	return true;
 }
 
-bool oskn_ObjList_remove(oskn_ObjList* self, int id) {
+bool oskn_ObjList_remove(oskn_ObjList* self, oskn_ObjId id) {
 	for (int i = self->count - 1; 0 <= i; --i) {
 		int item = self->activeList[i];
 		if (item != id) continue;
@@ -506,7 +508,7 @@ oskn_Obj* oskn_App_createEnemy(oskn_App* self, oskn_Vec2 pos, UINT8 lv) {
 	obj.transform.rotation = self->time.time * 10.0f;
 	obj.enemy.speed = 25.0f + 75.0f * rand() / RAND_MAX / lv;
 
-	INT32 id = oskn_ObjList_add(&app_g.objList, &obj);
+	oskn_ObjId id = oskn_ObjList_add(&app_g.objList, &obj);
 	return oskn_ObjList_get(&app_g.objList, id);
 }
 
@@ -975,7 +977,7 @@ void oskn_App_update(oskn_App* self) {
 				if (self->enemyAddCountMax <= self->enemyAddCount) {
 					INT32 enemyCount = 0;
 					for (int i = 0, iCount = self->objList.count; i < iCount; ++i) {
-						INT32 objId = self->objList.activeList[i];
+						oskn_ObjId objId = self->objList.activeList[i];
 						oskn_Obj* obj = oskn_ObjList_get(&self->objList, objId);
 						if (obj->type != oskn_ObjType_Enemy) continue;
 						++enemyCount;
