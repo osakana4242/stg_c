@@ -104,8 +104,14 @@ typedef struct _oskn_Enemy {
 	float speed;
 } oskn_Enemy;
 
+typedef struct _oskn_Camera {
+	INT32 playerId;
+
+} oskn_Camera;
+
 typedef enum _oskn_ObjType {
 	oskn_ObjType_None,
+	oskn_ObjType_Camera,
 	oskn_ObjType_Player,
 	oskn_ObjType_Enemy,
 	oskn_ObjType_Fuel,
@@ -151,6 +157,7 @@ typedef enum _oskn_AppState {
 typedef struct _oskn_App {
 	oskn_ObjList objList;
 	oskn_ObjId playerId;
+	oskn_ObjId cameraId;
 	float fps;
 	float frameInterval;
 	oskn_Vec2 screenSize;
@@ -565,8 +572,8 @@ bool oskn_App_init(oskn_App* self, HWND hWnd) {
 	self->frameInterval = 1.0f / self->fps;
 	self->areaRect.x = -64;
 	self->areaRect.y = -64;
-	self->areaRect.width = 320 + 128;
-	self->areaRect.height = 240 + 128;
+	self->areaRect.width = 320 * 2 + 128;
+	self->areaRect.height = 240 * 2 + 128;
 	HDC hdc;
 	RECT rc;
 	hdc = GetDC(hWnd);                      	// ウインドウのDCを取得
@@ -657,6 +664,24 @@ void oskn_App_updateObj(oskn_App* self) {
 		oskn_Obj* obj = oskn_ObjList_get(objList, id);
 
 		switch (obj->type) {
+		case oskn_ObjType_Camera: {
+			// プレイヤーを追従する.
+			oskn_Obj* target = oskn_ObjList_get(&self->objList, self->playerId);
+			if (NULL != target) {
+				oskn_Vec2 pos = obj->transform.position;
+				oskn_Vec2 tpos = target->transform.position;
+				// https://osakana4242.hatenablog.com/entry/2021/03/31/230412
+				// 秒間 6 割距離を詰める.
+				float easeOutSpeed = 0.6f;
+				// このフレームで詰める割合.
+				float deltaRate = 1.0f - powf(1.0f - easeOutSpeed, self->time.deltaTime);
+				oskn_Vec2 mov = oskn_Vec2Util_mulF(oskn_Vec2Util_subVec2(tpos, pos), deltaRate);
+
+				pos = oskn_Vec2Util_addVec2(pos, mov);
+				obj->transform.position = pos;
+			}
+			break;
+		}
 		case oskn_ObjType_Player: {
 			oskn_Vec2 inputDir = oskn_Input_getDirection(&app_g.input);
 
@@ -896,6 +921,12 @@ void oskn_App_updateObj(oskn_App* self) {
 	}
 }
 
+void oskn_App_createCamera(oskn_App* self) {
+	oskn_Obj camera = { 0 };
+	camera.type = oskn_ObjType_Camera;
+	self->cameraId = oskn_ObjList_add(&self->objList, &camera);
+}
+
 void oskn_App_createPlayer(oskn_App* self) {
 	oskn_Vec2 areaCenter = oskn_Rect_center(self->areaRect);
 	oskn_Obj obj = { 0 };
@@ -944,6 +975,7 @@ void oskn_App_update(oskn_App* self) {
 				app_g.enemyAddCount = 0;
 				app_g.enemyAddCountMax = 0;
 
+				oskn_App_createCamera(self);
 				oskn_App_createPlayer(self);
 			}
 
@@ -963,6 +995,7 @@ void oskn_App_update(oskn_App* self) {
 				app_g.enemyAddCount = 0;
 				app_g.enemyAddCountMax = 8;
 
+				oskn_App_createCamera(self);
 				oskn_App_createPlayer(self);
 			}
 
@@ -1085,43 +1118,52 @@ void draw(HWND hWnd) {
 	SelectObject(hdc, GetStockObject(BLACK_BRUSH));
 	Rectangle(hdc, rcClient.left, rcClient.top, rcClient.right, rcClient.bottom);
 	SelectObject(hdc, GetStockObject(WHITE_BRUSH));
-	for (int i = 0, iCount = app_g.objList.count; i < iCount; ++i) {
-		int id = app_g.objList.activeList[i];
-		oskn_Obj* obj = oskn_ObjList_get(&app_g.objList, id);
-		POINT pt;
-		pt.x = (int)obj->transform.position.x;
-		pt.y = (int)obj->transform.position.y;
-//		TextOut(hdc, pt.x, pt.y, lptStr, lstrlen(lptStr));
-		RECT rc;
-		COLORREF rgb;
-		switch (obj->type) {
-		case oskn_ObjType_Player:
-			rgb = RGB(0x80, 0x00, 0xff);
-			break;
-		case oskn_ObjType_PlayerBullet:
-			rgb = (obj->bullet.lv < 2) ?
-				RGB(0x80, 0x00, 0xff) :
-				RGB(0xc0, 0x80, 0xff);
-			break;
-		case oskn_ObjType_Fuel:
-			rgb = RGB(0x80, 0x80, 0xff);
-			break;
-		case oskn_ObjType_Enemy:
-		case oskn_ObjType_EnemyBullet:
-			rgb = RGB(0xff, 0x00, 0x00);
-			break;
-		default:
-			rgb = RGB(0xff, 0x00, 0xff);
-			break;
+
+	// カメラの数だけオブジェクトを描画する. 1 台しかないけど.
+	for (int camI = 0, camICount = app_g.objList.count; camI < camICount; ++camI) {
+		int id = app_g.objList.activeList[camI];
+		oskn_Obj* camera = oskn_ObjList_get(&app_g.objList, id);
+		if (camera->type != oskn_ObjType_Camera) continue;
+		oskn_Vec2 cameraOffset = oskn_Vec2Util_mulF(oskn_Vec2Util_addVec2(camera->transform.position, oskn_Vec2Util_mulF(app_g.screenSize, -0.5f)), -1.0f);
+
+		for (int i = 0, iCount = app_g.objList.count; i < iCount; ++i) {
+			int id = app_g.objList.activeList[i];
+			oskn_Obj* obj = oskn_ObjList_get(&app_g.objList, id);
+			POINT pt;
+			pt.x = (int)(obj->transform.position.x + cameraOffset.x);
+			pt.y = (int)(obj->transform.position.y + cameraOffset.y);
+			RECT rc;
+			COLORREF rgb;
+			switch (obj->type) {
+			case oskn_ObjType_Player:
+				rgb = RGB(0x80, 0x00, 0xff);
+				break;
+			case oskn_ObjType_PlayerBullet:
+				rgb = (obj->bullet.lv < 2) ?
+					RGB(0x80, 0x00, 0xff) :
+					RGB(0xc0, 0x80, 0xff);
+				break;
+			case oskn_ObjType_Fuel:
+				rgb = RGB(0x80, 0x80, 0xff);
+				break;
+			case oskn_ObjType_Enemy:
+			case oskn_ObjType_EnemyBullet:
+				rgb = RGB(0xff, 0x00, 0x00);
+				break;
+			default:
+				rgb = RGB(0xff, 0x00, 0xff);
+				break;
+			}
+			rc.left   = (int)(pt.x - obj->collider.radius);
+			rc.top    = (int)(pt.y - obj->collider.radius);
+			rc.right  = (int)(rc.left + (obj->collider.radius * 2.0f));
+			rc.bottom = (int)(rc.top  + (obj->collider.radius * 2.0f));
+			HBRUSH hBrash = CreateSolidBrush(rgb);
+			FillRect(hdc, &rc, hBrash);
+			DeleteObject(hBrash);
 		}
-		rc.left   = (int)(pt.x - obj->collider.radius);
-		rc.top    = (int)(pt.y - obj->collider.radius);
-		rc.right  = (int)(rc.left + (obj->collider.radius * 2.0f));
-		rc.bottom = (int)(rc.top  + (obj->collider.radius * 2.0f));
-		HBRUSH hBrash = CreateSolidBrush(rgb);
-		FillRect(hdc, &rc, hBrash);
-		DeleteObject(hBrash);
 	}
+
 
 	SIZE textSize;
 	INT32 textX;
