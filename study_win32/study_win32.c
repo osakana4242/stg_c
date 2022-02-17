@@ -119,14 +119,21 @@ typedef enum _oskn_ObjType {
 	oskn_ObjType_EnemyBullet,
 } oskn_ObjType;
 
-typedef INT32 oskn_ObjId;
+typedef struct _oskn_ObjId {
+	INT32 id;
+	INT32 index;
+} oskn_ObjId;
+
+bool oskn_ObjId_eq(oskn_ObjId a, oskn_ObjId b) {
+	return a.id == b.id;
+}
+
 
 typedef struct _oskn_Obj {
 	bool destroyed;
 	/// <summary>この時間に達していたら remove する. 0 以下は無効.</summary>
 	float destroyTime;
 	oskn_ObjId id;
-	LPCWSTR name;
 	float spawnedTime;
 
 	oskn_ObjType type;
@@ -140,9 +147,10 @@ typedef struct _oskn_Obj {
 
 typedef struct _oskn_ObjList {
 	oskn_Obj* totalList;
-	int* activeList;
-	int count;
-	int capacity;
+	oskn_ObjId* activeIdList;
+	INT32 activeIdListCount;
+	INT32 capacity;
+	INT32 nextId;
 } oskn_ObjList;
 
 typedef enum _oskn_AppState {
@@ -433,7 +441,7 @@ bool oskn_Obj_isNeedHitTest(const oskn_Obj* self, const oskn_Obj* other) {
 bool oskn_ObjList_init(oskn_ObjList* self, int capacity) {
 	self->capacity = capacity;
 	self->totalList = calloc(self->capacity, sizeof(oskn_Obj));
-	self->activeList = calloc(self->capacity, sizeof(int));
+	self->activeIdList = calloc(self->capacity, sizeof(oskn_ObjId));
 	for (int i = 1, iCount = self->capacity; i < iCount; ++i) {
 		oskn_Obj* item = &self->totalList[i];
 		item->destroyed = true;
@@ -443,19 +451,27 @@ bool oskn_ObjList_init(oskn_ObjList* self, int capacity) {
 }
 
 bool oskn_ObjList_free(oskn_ObjList* self) {
-	free(self->activeList);
-	self->activeList = NULL;
+	free(self->activeIdList);
+	self->activeIdList = NULL;
 	free(self->totalList);
 	self->totalList = NULL;
 	return true;
 }
 
-oskn_Obj* oskn_ObjList_get(oskn_ObjList* self, int id) {
-	if (!id) return NULL;
-	return &self->totalList[id];
+oskn_Obj* oskn_ObjList_getByIndex(oskn_ObjList* self, INT32 index) {
+	if (index < 0 || self->capacity <= index) return NULL;
+	return &self->totalList[index];
 }
 
-int oskn_ObjList_add(oskn_ObjList* self, const oskn_Obj* obj) {
+oskn_Obj* oskn_ObjList_getById(oskn_ObjList* self, oskn_ObjId id) {
+	if (id.id == 0) return NULL;
+	oskn_Obj* obj = oskn_ObjList_getByIndex(self, id.index);
+	if (NULL == obj) return NULL;
+	if (!oskn_ObjId_eq(obj->id, id)) return NULL;
+	return obj;
+}
+
+oskn_Obj* oskn_ObjList_add(oskn_ObjList* self) {
 	int i = 1;
 	oskn_Obj* target = NULL;
 	for (int iCount = self->capacity; i < iCount; ++i) {
@@ -468,55 +484,70 @@ int oskn_ObjList_add(oskn_ObjList* self, const oskn_Obj* obj) {
 
 	if (NULL == target) return 0;
 
-	*target = *obj;
+	++self->nextId;
+	oskn_ObjId objId = { 0 };
+
+	objId.id = self->nextId;
+	objId.index = i;
+	memset(target, 0, sizeof(*target));
 	target->destroyed = false;
 	target->destroyTime = 0.0f;
-	target->id = i;
+	target->id = objId;
 	target->spawnedTime = app_g.time.time;
 
-	self->activeList[self->count] = i;
-	++self->count;
+	self->activeIdList[self->activeIdListCount] = objId;
+	++self->activeIdListCount;
 
-	return i;
+	return target;
 }
 
-bool oskn_ObjList_requestRemove(oskn_ObjList* self, oskn_ObjId id, float time) {
-	oskn_Obj* obj = oskn_ObjList_get(self, id);
-	if (NULL == obj) return false;
+bool oskn_ObjList_requestRemoveById(oskn_ObjList* self, oskn_ObjId id, float time) {
+	oskn_Obj* obj = oskn_ObjList_getById(self, id);
+	if (NULL == obj) {
+		return false;
+	}
 	obj->destroyTime = app_g.time.time + time;
 	return true;
 }
 
-bool oskn_ObjList_remove(oskn_ObjList* self, oskn_ObjId id) {
-	for (int i = self->count - 1; 0 <= i; --i) {
-		int item = self->activeList[i];
-		if (item != id) continue;
+bool oskn_ObjList_removeById(oskn_ObjList* self, oskn_ObjId id) {
+	for (int i = self->activeIdListCount - 1; 0 <= i; --i) {
+		oskn_ObjId id2 = self->activeIdList[i];
+		if (!oskn_ObjId_eq(id2, id)) continue;
 
-		for (int j = i, jCount = self->count; j < jCount; ++j) {
-			self->activeList[j] = self->activeList[j + 1];
+		for (int j = i, jCount = self->activeIdListCount; j < jCount; ++j) {
+			self->activeIdList[j] = self->activeIdList[j + 1];
 		}
-		--self->count;
+		--self->activeIdListCount;
 
-		oskn_Obj* obj = oskn_ObjList_get(self, id);
+		oskn_Obj* obj = oskn_ObjList_getById(self, id);
 		obj->destroyed = true;
 		return true;
 	}
 	return false;
 }
 
+bool oskn_ObjList_clear(oskn_ObjList* self) {
+	for (int i = self->activeIdListCount - 1; 0 <= i; --i) {
+		oskn_ObjId objId = self->activeIdList[i];
+		oskn_ObjList_removeById(self, objId);
+	}
+	self->nextId = 0;
+	return true;
+}
+
 oskn_Obj* oskn_App_createEnemy(oskn_App* self, oskn_Vec2 pos, UINT8 lv) {
-	oskn_Obj obj = { 0 };
-	obj.type = oskn_ObjType_Enemy;
-	obj.transform.position = pos;
-	obj.collider.radius = 12.0f * lv;
-	obj.enemy.hp = (float)(lv * 4);
-	obj.enemy.lv = lv;
+	oskn_Obj* obj = oskn_ObjList_add(&app_g.objList);
+	obj->type = oskn_ObjType_Enemy;
+	obj->transform.position = pos;
+	obj->collider.radius = 12.0f * lv;
+	obj->enemy.hp = (float)(lv * 4);
+	obj->enemy.lv = lv;
 
-	obj.transform.rotation = self->time.time * 10.0f;
-	obj.enemy.speed = 25.0f + 75.0f * rand() / RAND_MAX / lv;
+	obj->transform.rotation = self->time.time * 10.0f;
+	obj->enemy.speed = 25.0f + 75.0f * rand() / RAND_MAX / lv;
 
-	oskn_ObjId id = oskn_ObjList_add(&app_g.objList, &obj);
-	return oskn_ObjList_get(&app_g.objList, id);
+	return obj;
 }
 
 void oskn_App_test(oskn_App* self) {
@@ -599,7 +630,7 @@ void oskn_App_onHitObj(oskn_App* self, oskn_Obj* aObj, oskn_Obj* bObj) {
 		default: {
 			aObj->player.hp -= 1;
 			if (aObj->player.hp <= 0) {
-				oskn_ObjList_requestRemove(&app_g.objList, aObj->id, 0.0f);
+				oskn_ObjList_requestRemoveById(&app_g.objList, aObj->id, 0.0f);
 			}
 			break;
 		}
@@ -607,29 +638,28 @@ void oskn_App_onHitObj(oskn_App* self, oskn_Obj* aObj, oskn_Obj* bObj) {
 		break;
 	}
 	case oskn_ObjType_Fuel: {
-		oskn_ObjList_requestRemove(&app_g.objList, aObj->id, 0.0f);
+		oskn_ObjList_requestRemoveById(&app_g.objList, aObj->id, 0.0f);
 		break;
 	}
 	case oskn_ObjType_PlayerBullet: {
-		oskn_ObjList_requestRemove(&app_g.objList, aObj->id, 0.0f);
+		oskn_ObjList_requestRemoveById(&app_g.objList, aObj->id, 0.0f);
 		
 		for (int i = 0; i < 4; ++i) {
-			oskn_Obj fuel = { 0 };
-			fuel.collider.radius = 3.0f;
-			fuel.type = oskn_ObjType_Fuel;
+			oskn_Obj* fuel = oskn_ObjList_add(&app_g.objList);
+			fuel->collider.radius = 3.0f;
+			fuel->type = oskn_ObjType_Fuel;
 			oskn_Vec2 pos = aObj->transform.position;
 			oskn_Vec2 vec;
 			vec.x = -1.0f + 2.0f * rand() / RAND_MAX;
 			vec.y = -1.0f + 2.0f * rand() / RAND_MAX;
 			vec = oskn_Vec2_normalize(vec);
-			fuel.transform.rotation = oskn_Vec2_toAngle(vec);
-			fuel.transform.position = pos;
+			fuel->transform.rotation = oskn_Vec2_toAngle(vec);
+			fuel->transform.position = pos;
 
 			float speed = 100.0f + 100.0f * rand() / RAND_MAX;
 			oskn_Vec2 vel = oskn_Vec2Util_mulF(vec, speed);
-			fuel.rigidbody.enabled = true;
-			fuel.rigidbody.velocity = vel;
-			oskn_ObjList_add(&app_g.objList, &fuel);
+			fuel->rigidbody.enabled = true;
+			fuel->rigidbody.velocity = vel;
 		}
 		break;
 	}
@@ -647,7 +677,7 @@ void oskn_App_onHitObj(oskn_App* self, oskn_Obj* aObj, oskn_Obj* bObj) {
 					}
 				}
 
-				oskn_ObjList_requestRemove(&app_g.objList, aObj->id, 0.0f);
+				oskn_ObjList_requestRemoveById(&app_g.objList, aObj->id, 0.0f);
 			}
 		}
 		break;
@@ -659,14 +689,14 @@ void oskn_App_onHitObj(oskn_App* self, oskn_Obj* aObj, oskn_Obj* bObj) {
 void oskn_App_updateObj(oskn_App* self) {
 	oskn_ObjList* objList = &self->objList;
 
-	for (int i = 0, iCount = objList->count; i < iCount; ++i) {
-		int id = objList->activeList[i];
-		oskn_Obj* obj = oskn_ObjList_get(objList, id);
+	for (int i = 0, iCount = objList->activeIdListCount; i < iCount; ++i) {
+		oskn_ObjId id = objList->activeIdList[i];
+		oskn_Obj* obj = oskn_ObjList_getById(objList, id);
 
 		switch (obj->type) {
 		case oskn_ObjType_Camera: {
 			// プレイヤーを追従する.
-			oskn_Obj* target = oskn_ObjList_get(&self->objList, self->playerId);
+			oskn_Obj* target = oskn_ObjList_getById(&self->objList, self->playerId);
 			if (NULL != target) {
 				oskn_Vec2 pos = obj->transform.position;
 				oskn_Vec2 tpos = target->transform.position;
@@ -723,15 +753,14 @@ void oskn_App_updateObj(oskn_App* self) {
 						if (hasFuel) {
 							obj->player.shotFuelRest = nextFuel;
 
-							oskn_Obj bullet = { 0 };
-							bullet.type = oskn_ObjType_PlayerBullet;
-							bullet.bullet.lv = shotLv;
-							bullet.bullet.damage = 1.0f;
-							bullet.bullet.speed = 400.0f;
-							bullet.collider.radius = 8.0f;
-							bullet.transform.position = obj->transform.position;
-							bullet.transform.rotation = obj->transform.rotation;
-							oskn_ObjList_add(&app_g.objList, &bullet);
+							oskn_Obj* bullet = oskn_ObjList_add(&app_g.objList);
+							bullet->type = oskn_ObjType_PlayerBullet;
+							bullet->bullet.lv = shotLv;
+							bullet->bullet.damage = 1.0f;
+							bullet->bullet.speed = 400.0f;
+							bullet->collider.radius = 8.0f;
+							bullet->transform.position = obj->transform.position;
+							bullet->transform.rotation = obj->transform.rotation;
 						}
 					}
 				}
@@ -799,7 +828,7 @@ void oskn_App_updateObj(oskn_App* self) {
 			}
 
 			if (isOutside) {
-				oskn_ObjList_requestRemove(objList, id, 0.0f);
+				oskn_ObjList_requestRemoveById(objList, id, 0.0f);
 			}
 
 			obj->transform.position = pos;
@@ -839,7 +868,7 @@ void oskn_App_updateObj(oskn_App* self) {
 			break;
 		}
 		case oskn_ObjType_Fuel: {
-			oskn_Obj* player = oskn_ObjList_get(&app_g.objList, app_g.playerId);
+			oskn_Obj* player = oskn_ObjList_getById(&app_g.objList, app_g.playerId);
 			if (NULL != player && 0.0f < player->player.hp) {
 				// プレイヤーに吸い込まれる軌道.
 				// プレイヤーに近いほど吸い込まれる力が強くなる.
@@ -868,7 +897,7 @@ void oskn_App_updateObj(oskn_App* self) {
 			// 時間経過で消滅.
 			float aliveTime = app_g.time.time - obj->spawnedTime;
 			if (0.5f <= aliveTime) {
-				oskn_ObjList_requestRemove(&app_g.objList, id, 0.0f);
+				oskn_ObjList_requestRemoveById(&app_g.objList, id, 0.0f);
 			}
 			break;
 		}
@@ -876,9 +905,9 @@ void oskn_App_updateObj(oskn_App* self) {
 	}
 
 	// rigidbody.
-	for (int i = 0, iCount = objList->count; i < iCount; ++i) {
-		int aId = objList->activeList[i];
-		oskn_Obj* aObj = oskn_ObjList_get(objList, aId);
+	for (int i = 0, iCount = objList->activeIdListCount; i < iCount; ++i) {
+		oskn_ObjId aId = objList->activeIdList[i];
+		oskn_Obj* aObj = oskn_ObjList_getById(objList, aId);
 		if (!aObj->rigidbody.enabled) continue;
 		oskn_Vec2 pos = aObj->transform.position;
 		oskn_Vec2 v = oskn_Vec2Util_mulF(aObj->rigidbody.velocity, app_g.time.deltaTime);
@@ -887,15 +916,15 @@ void oskn_App_updateObj(oskn_App* self) {
 	}
 
 	// 衝突判定.
-	for (int i = 0, iCount = objList->count; i < iCount; ++i) {
-		int aId = objList->activeList[i];
-		oskn_Obj* aObj = oskn_ObjList_get(objList, aId);
+	for (int i = 0, iCount = objList->activeIdListCount; i < iCount; ++i) {
+		oskn_ObjId aId = objList->activeIdList[i];
+		oskn_Obj* aObj = oskn_ObjList_getById(objList, aId);
 		oskn_Vec2 aPos = aObj->transform.position;
 		oskn_Collider aCol = aObj->collider;
 
-		for (int j = i + 1, jCount = objList->count; j < jCount; ++j) {
-			int bId = objList->activeList[j];
-			oskn_Obj* bObj = oskn_ObjList_get(objList, bId);
+		for (int j = i + 1, jCount = objList->activeIdListCount; j < jCount; ++j) {
+			oskn_ObjId bId = objList->activeIdList[j];
+			oskn_Obj* bObj = oskn_ObjList_getById(objList, bId);
 			if (!oskn_Obj_isNeedHitTest(aObj, bObj)) continue;
 
 			oskn_Vec2 bPos = bObj->transform.position;
@@ -913,36 +942,36 @@ void oskn_App_updateObj(oskn_App* self) {
 		}
 	}
 
-	for (int i = objList->count - 1; 0 <= i; --i) {
-		int id = objList->activeList[i];
-		oskn_Obj* obj = oskn_ObjList_get(objList, id);
+	for (int i = objList->activeIdListCount - 1; 0 <= i; --i) {
+		oskn_ObjId id = objList->activeIdList[i];
+		oskn_Obj* obj = oskn_ObjList_getById(objList, id);
 		if (obj->destroyTime < app_g.time.time) continue;
-		oskn_ObjList_remove(objList, id);
+		oskn_ObjList_removeById(objList, id);
 	}
 }
 
 void oskn_App_createCamera(oskn_App* self) {
-	oskn_Obj camera = { 0 };
-	camera.type = oskn_ObjType_Camera;
-	self->cameraId = oskn_ObjList_add(&self->objList, &camera);
+	oskn_Obj* camera = oskn_ObjList_add(&self->objList);
+	camera->type = oskn_ObjType_Camera;
+	self->cameraId = camera->id;
 }
 
 void oskn_App_createPlayer(oskn_App* self) {
 	oskn_Vec2 areaCenter = oskn_Rect_center(self->areaRect);
-	oskn_Obj obj = { 0 };
-	obj.type = oskn_ObjType_Player;
-	obj.collider.radius = 12.0f;
-	obj.player.hp = 1.0f;
-	obj.transform.position = areaCenter;
-	obj.player.shotInterval1 = 0.1f;
-	obj.player.shotInterval2 = 0.05f;
-	obj.player.shotFuelCapacity1 = 100;
-	obj.player.shotFuelCapacity2 = 200;
-	obj.player.shotFuelRest = obj.player.shotFuelCapacity1;
-	obj.player.shotFuelRecover = obj.player.shotFuelCapacity1;
-	obj.player.shotFuelConsume = obj.player.shotFuelCapacity1 / 3;
+	oskn_Obj* obj = oskn_ObjList_add(&app_g.objList);
+	obj->type = oskn_ObjType_Player;
+	obj->collider.radius = 12.0f;
+	obj->player.hp = 1.0f;
+	obj->transform.position = areaCenter;
+	obj->player.shotInterval1 = 0.1f;
+	obj->player.shotInterval2 = 0.05f;
+	obj->player.shotFuelCapacity1 = 100;
+	obj->player.shotFuelCapacity2 = 200;
+	obj->player.shotFuelRest = obj->player.shotFuelCapacity1;
+	obj->player.shotFuelRecover = obj->player.shotFuelCapacity1;
+	obj->player.shotFuelConsume = obj->player.shotFuelCapacity1 / 3;
 
-	self->playerId = oskn_ObjList_add(&app_g.objList, &obj);
+	self->playerId = obj->id;
 }
 
 void oskn_App_update(oskn_App* self) {
@@ -968,10 +997,7 @@ void oskn_App_update(oskn_App* self) {
 		}
 		case oskn_AppState_Title: {
 			if (isEnter) {
-				for (int i = 0, iCount = self->objList.count; i < iCount; ++i) {
-					int objId = self->objList.activeList[i];
-					oskn_ObjList_requestRemove(&self->objList, objId, 0.0f);
-				}
+				oskn_ObjList_clear(&self->objList);
 				app_g.enemyAddCount = 0;
 				app_g.enemyAddCountMax = 0;
 
@@ -988,10 +1014,7 @@ void oskn_App_update(oskn_App* self) {
 		}
 		case oskn_AppState_Ready: {
 			if (isEnter) {
-				for (int i = 0, iCount = self->objList.count; i < iCount; ++i) {
-					int objId = self->objList.activeList[i];
-					oskn_ObjList_requestRemove(&self->objList, objId, 0.0f);
-				}
+				oskn_ObjList_clear(&self->objList);
 				app_g.enemyAddCount = 0;
 				app_g.enemyAddCountMax = 8;
 
@@ -1009,9 +1032,9 @@ void oskn_App_update(oskn_App* self) {
 			{
 				if (self->enemyAddCountMax <= self->enemyAddCount) {
 					INT32 enemyCount = 0;
-					for (int i = 0, iCount = self->objList.count; i < iCount; ++i) {
-						oskn_ObjId objId = self->objList.activeList[i];
-						oskn_Obj* obj = oskn_ObjList_get(&self->objList, objId);
+					for (int i = 0, iCount = self->objList.activeIdListCount; i < iCount; ++i) {
+						oskn_ObjId objId = self->objList.activeIdList[i];
+						oskn_Obj* obj = oskn_ObjList_getById(&self->objList, objId);
 						if (obj->type != oskn_ObjType_Enemy) continue;
 						++enemyCount;
 					}
@@ -1022,7 +1045,7 @@ void oskn_App_update(oskn_App* self) {
 			}
 			// ゲームオーバー判定.
 			{
-				oskn_Obj* player = oskn_ObjList_get(&self->objList, self->playerId);
+				oskn_Obj* player = oskn_ObjList_getById(&self->objList, self->playerId);
 				if (player->player.hp <= 0.0f) {
 					nextState = oskn_AppState_Over;
 				}
@@ -1120,15 +1143,15 @@ void draw(HWND hWnd) {
 	SelectObject(hdc, GetStockObject(WHITE_BRUSH));
 
 	// カメラの数だけオブジェクトを描画する. 1 台しかないけど.
-	for (int camI = 0, camICount = app_g.objList.count; camI < camICount; ++camI) {
-		int id = app_g.objList.activeList[camI];
-		oskn_Obj* camera = oskn_ObjList_get(&app_g.objList, id);
+	for (int camI = 0, camICount = app_g.objList.activeIdListCount; camI < camICount; ++camI) {
+		oskn_ObjId id = app_g.objList.activeIdList[camI];
+		oskn_Obj* camera = oskn_ObjList_getById(&app_g.objList, id);
 		if (camera->type != oskn_ObjType_Camera) continue;
 		oskn_Vec2 cameraOffset = oskn_Vec2Util_mulF(oskn_Vec2Util_addVec2(camera->transform.position, oskn_Vec2Util_mulF(app_g.screenSize, -0.5f)), -1.0f);
 
-		for (int i = 0, iCount = app_g.objList.count; i < iCount; ++i) {
-			int id = app_g.objList.activeList[i];
-			oskn_Obj* obj = oskn_ObjList_get(&app_g.objList, id);
+		for (int i = 0, iCount = app_g.objList.activeIdListCount; i < iCount; ++i) {
+			oskn_ObjId id = app_g.objList.activeIdList[i];
+			oskn_Obj* obj = oskn_ObjList_getById(&app_g.objList, id);
 			POINT pt;
 			pt.x = (int)(obj->transform.position.x + cameraOffset.x);
 			pt.y = (int)(obj->transform.position.y + cameraOffset.y);
@@ -1160,6 +1183,8 @@ void draw(HWND hWnd) {
 			rc.bottom = (int)(rc.top  + (obj->collider.radius * 2.0f));
 			HBRUSH hBrash = CreateSolidBrush(rgb);
 			FillRect(hdc, &rc, hBrash);
+			// wsprintf(str, TEXT("%d"), obj->id.id);
+			// TextOut(hdc, rc.left, rc.top, str, lstrlen(str));
 			DeleteObject(hBrash);
 		}
 	}
@@ -1228,7 +1253,7 @@ void draw(HWND hWnd) {
 	}
 
 	{
-		oskn_Obj* player = oskn_ObjList_get(&app_g.objList, app_g.playerId);
+		oskn_Obj* player = oskn_ObjList_getById(&app_g.objList, app_g.playerId);
 		if (NULL != player && 0 < player->player.hp) {
 			float fuelRest = player->player.shotFuelRest;
 			// [        ]
