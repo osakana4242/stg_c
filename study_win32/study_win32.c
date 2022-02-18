@@ -195,6 +195,13 @@ oskn_App app_g = { 0 };
 
 // 関数 
 
+float oskn_Math_clamp(float v, float vMin, float vMax) {
+	return (v < vMin) ? vMin :
+	                    (vMax < v) ? vMax :
+	                                 v;
+}
+
+
 bool oskn_Float_roundEq(float a, float b, float threshold) {
 	float d = a - b;
 	return -threshold <= d && d <= threshold;
@@ -700,9 +707,22 @@ void oskn_App_updateObj(oskn_App* self) {
 			if (NULL != target) {
 				oskn_Vec2 pos = obj->transform.position;
 				oskn_Vec2 tpos = target->transform.position;
+
+				// プレイヤーが向いてる方向に画面を広くとる.
+				const float cameraTargetOffset = 64.0f;
+				tpos = oskn_Vec2Util_addVec2(tpos, oskn_Vec2Util_mulF(oskn_Vec2Util_fromAngle(target->transform.rotation), cameraTargetOffset));
+				
+				// tpos を画面端で clamp.
+				oskn_Vec2 rMin = oskn_Rect_min(app_g.areaRect);
+				oskn_Vec2 rMax = oskn_Rect_max(app_g.areaRect);
+				rMin = oskn_Vec2Util_addVec2(rMin, oskn_Vec2Util_mulF(app_g.screenSize, 0.5f));
+				rMax = oskn_Vec2Util_addVec2(rMax, oskn_Vec2Util_mulF(app_g.screenSize, -0.5f));
+				tpos.x = oskn_Math_clamp(tpos.x, rMin.x, rMax.x);
+				tpos.y = oskn_Math_clamp(tpos.y, rMin.y, rMax.y);
+
 				// https://osakana4242.hatenablog.com/entry/2021/03/31/230412
-				// 秒間 6 割距離を詰める.
-				float easeOutSpeed = 0.6f;
+				// 秒間 8 割距離を詰める.
+				float easeOutSpeed = 0.8f;
 				// このフレームで詰める割合.
 				float deltaRate = 1.0f - powf(1.0f - easeOutSpeed, self->time.deltaTime);
 				oskn_Vec2 mov = oskn_Vec2Util_mulF(oskn_Vec2Util_subVec2(tpos, pos), deltaRate);
