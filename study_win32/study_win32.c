@@ -74,6 +74,11 @@ typedef struct _oskn_Input {
 	INT32 keyStateNext;
 } oskn_Input;
 
+typedef struct _oskn_ObjId {
+	INT32 id;
+	INT32 index;
+} oskn_ObjId;
+
 typedef struct _oskn_Player {
 	float hp;
 	float shotInterval1;
@@ -89,6 +94,10 @@ typedef struct _oskn_Player {
 	float shotFuelCapacity1;
 	float shotFuelCapacity2;
 } oskn_Player;
+
+typedef struct _oskn_DirectionMarker {
+	oskn_ObjId ownerId;
+} oskn_DirectionMarker;
 
 typedef struct _oskn_Bullet {
 	/// <summary>レベル. 色が変わるだけ</summary>
@@ -113,21 +122,12 @@ typedef enum _oskn_ObjType {
 	oskn_ObjType_None,
 	oskn_ObjType_Camera,
 	oskn_ObjType_Player,
+	oskn_ObjType_DirectionMarker,
 	oskn_ObjType_Enemy,
 	oskn_ObjType_Fuel,
 	oskn_ObjType_PlayerBullet,
 	oskn_ObjType_EnemyBullet,
 } oskn_ObjType;
-
-typedef struct _oskn_ObjId {
-	INT32 id;
-	INT32 index;
-} oskn_ObjId;
-
-bool oskn_ObjId_eq(oskn_ObjId a, oskn_ObjId b) {
-	return a.id == b.id;
-}
-
 
 typedef struct _oskn_Obj {
 	bool destroyed;
@@ -141,6 +141,7 @@ typedef struct _oskn_Obj {
 	oskn_Collider collider;
 	oskn_Rigidbody rigidbody;
 	oskn_Player player;
+	oskn_DirectionMarker directionMarker;
 	oskn_Bullet bullet;
 	oskn_Enemy enemy;
 } oskn_Obj;
@@ -409,6 +410,11 @@ void oskn_Input_update(oskn_Input* self) {
 }
 
 
+bool oskn_ObjId_eq(oskn_ObjId a, oskn_ObjId b) {
+	return a.id == b.id;
+}
+
+
 bool oskn_Obj_isNeedHitTest(const oskn_Obj* self, const oskn_Obj* other) {
 	oskn_ObjType type1 = min(self->type, other->type);
 	oskn_ObjType type2 = max(self->type, other->type);
@@ -528,6 +534,7 @@ bool oskn_ObjList_removeById(oskn_ObjList* self, oskn_ObjId id) {
 		--self->activeIdListCount;
 
 		oskn_Obj* obj = oskn_ObjList_getById(self, id);
+		memset(obj, 0, sizeof(*obj));
 		obj->destroyed = true;
 		return true;
 	}
@@ -635,9 +642,8 @@ void oskn_App_onHitObj(oskn_App* self, oskn_Obj* aObj, oskn_Obj* bObj) {
 			break;
 		}
 		default: {
-			aObj->player.hp -= 1;
-			if (aObj->player.hp <= 0) {
-				oskn_ObjList_requestRemoveById(&app_g.objList, aObj->id, 0.0f);
+			if (0 < aObj->player.hp) {
+				aObj->player.hp -= 1;
 			}
 			break;
 		}
@@ -723,6 +729,31 @@ void oskn_App_updateObj(oskn_App* self) {
 				// https://osakana4242.hatenablog.com/entry/2021/03/31/230412
 				// 秒間 8 割距離を詰める.
 				float easeOutSpeed = 0.8f;
+				// このフレームで詰める割合.
+				float deltaRate = 1.0f - powf(1.0f - easeOutSpeed, self->time.deltaTime);
+				oskn_Vec2 mov = oskn_Vec2Util_mulF(oskn_Vec2Util_subVec2(tpos, pos), deltaRate);
+
+				pos = oskn_Vec2Util_addVec2(pos, mov);
+				obj->transform.position = pos;
+			}
+			break;
+		}
+		case oskn_ObjType_DirectionMarker: {
+			// 対象の前方を示す.
+			oskn_Obj* target = oskn_ObjList_getById(&self->objList, obj->directionMarker.ownerId);
+			if (NULL == target) {
+				oskn_ObjList_requestRemoveById(&self->objList, obj->id, 0.0f);
+			} else {
+				oskn_Vec2 pos = obj->transform.position;
+				oskn_Vec2 tpos = target->transform.position;
+
+				// プレイヤーが向いてる方向に画面を広くとる.
+				const float cameraTargetOffset = 48.0f;
+				tpos = oskn_Vec2Util_addVec2(tpos, oskn_Vec2Util_mulF(oskn_Vec2Util_fromAngle(target->transform.rotation), cameraTargetOffset));
+
+				// https://osakana4242.hatenablog.com/entry/2021/03/31/230412
+				// 秒間 9.9 割距離を詰める.
+				float easeOutSpeed = 0.99f;
 				// このフレームで詰める割合.
 				float deltaRate = 1.0f - powf(1.0f - easeOutSpeed, self->time.deltaTime);
 				oskn_Vec2 mov = oskn_Vec2Util_mulF(oskn_Vec2Util_subVec2(tpos, pos), deltaRate);
@@ -991,6 +1022,11 @@ void oskn_App_createPlayer(oskn_App* self) {
 	obj->player.shotFuelRecover = obj->player.shotFuelCapacity1;
 	obj->player.shotFuelConsume = obj->player.shotFuelCapacity1 / 3;
 
+	oskn_Obj* marker = oskn_ObjList_add(&app_g.objList);
+	marker->type = oskn_ObjType_DirectionMarker;
+	marker->collider.radius = 8;
+	marker->directionMarker.ownerId = obj->id;
+
 	self->playerId = obj->id;
 }
 
@@ -1073,6 +1109,10 @@ void oskn_App_update(oskn_App* self) {
 			break;
 		}
 		case oskn_AppState_Over: {
+			if (isEnter) {
+				oskn_Obj* player = oskn_ObjList_getById(&self->objList, self->playerId);
+				oskn_ObjList_requestRemoveById(&app_g.objList, player->id, 0.0f);
+			}
 			if (0.5f <= stateTime) {
 				if (oskn_Input_hasKeyDown(&self->input, OSKN_KEY_START)) {
 					nextState = oskn_AppState_Title;
@@ -1192,6 +1232,9 @@ void draw(HWND hWnd) {
 			case oskn_ObjType_Enemy:
 			case oskn_ObjType_EnemyBullet:
 				rgb = RGB(0xff, 0x00, 0x00);
+				break;
+			case oskn_ObjType_DirectionMarker:
+				rgb = RGB(0xc0, 0xc0, 0xc0);
 				break;
 			default:
 				rgb = RGB(0xff, 0x00, 0xff);
