@@ -187,6 +187,9 @@ typedef struct _oskn_App {
 
 // 定数、グローバル変数 
 
+/// <summary>衝突検証モード. プレイヤー無敵, ステージを狭める. 岩の配置を固定.</summary>
+bool OSKN_COL_TEST_ENABLED = true;
+
 #define ANGLE_PI 3.141592f
 #define DEG_TO_RAD (ANGLE_PI / 180.0f)
 #define RAD_TO_DEG (180.0f / ANGLE_PI)
@@ -430,6 +433,9 @@ bool oskn_Obj_isNeedHitTest(const oskn_Obj* self, const oskn_Obj* other) {
 		case oskn_ObjType_Fuel:
 		case oskn_ObjType_Enemy:
 		case oskn_ObjType_EnemyBullet:
+			if (OSKN_COL_TEST_ENABLED) {
+				return false;
+			}
 			return true;
 		default: return false;
 		}
@@ -728,10 +734,17 @@ bool oskn_App_init(oskn_App* self, HWND hWnd) {
 	self->screenSize.y = 240;
 	self->fps = 60.0f;
 	self->frameInterval = 1.0f / self->fps;
-	self->areaRect.x = -64;
-	self->areaRect.y = -64;
-	self->areaRect.width = 320 * 2 + 128;
-	self->areaRect.height = 240 * 2 + 128;
+	if (OSKN_COL_TEST_ENABLED) {
+		self->areaRect.x = 0;
+		self->areaRect.y = 0;
+		self->areaRect.width = 150;
+		self->areaRect.height = 150;
+	} else {
+		self->areaRect.x = -64;
+		self->areaRect.y = -64;
+		self->areaRect.width = 320 * 2 + 128;
+		self->areaRect.height = 240 * 2 + 128;
+	}
 	HDC hdc;
 	RECT rc;
 	hdc = GetDC(hWnd);                      	// ウインドウのDCを取得
@@ -1146,6 +1159,55 @@ void oskn_App_createPlayer(oskn_App* self) {
 	self->playerId = obj->id;
 }
 
+// 岩石の生成.
+void oskn_App_updateEnemySpawn(oskn_App* self) {
+	if (OSKN_COL_TEST_ENABLED) {
+		if (0 < app_g.enemyAddCount) return;
+
+		oskn_Obj* obj;
+		obj = oskn_App_createEnemy(&app_g, oskn_Vec2Util_create(10, 50), 3);
+		obj->rigidbody.velocity = oskn_Vec2Util_create(20, 00);
+
+		obj = oskn_App_createEnemy(&app_g, oskn_Vec2Util_create(140, 50), 2);
+		obj->rigidbody.velocity = oskn_Vec2Util_create(-40, 0);
+
+		++app_g.enemyAddCount;
+
+		return;
+	}
+
+	if (app_g.enemyAddCountMax <= app_g.enemyAddCount) return;
+	float spawnInterval = 2.0f;
+	INT32 prevSec = (INT32)((self->time.time - self->frameInterval) / spawnInterval);
+	INT32 sec = (INT32)(self->time.time / spawnInterval);
+
+
+	if (1.0f < self->time.time && (prevSec < sec)) {
+		// spawn
+		oskn_Vec2 pos = { 0 };
+		int n = 4 * rand() / RAND_MAX;
+		oskn_Vec2 rectMin = oskn_Rect_min(self->areaRect);
+		oskn_Vec2 rectMax = oskn_Rect_max(self->areaRect);
+		switch (n) {
+		case 0:
+		case 1:
+			pos.x = (n == 0) ? rectMin.x : rectMax.x;
+			pos.y = self->areaRect.y + self->areaRect.height * rand() / RAND_MAX;
+			break;
+		case 2:
+		case 3:
+		default:
+			pos.x = self->areaRect.x + self->areaRect.width * rand() / RAND_MAX;
+			pos.y = (n == 2) ? rectMin.y : rectMax.y;
+			break;
+		}
+
+		oskn_App_createEnemy(&app_g, pos, 3);
+
+		++app_g.enemyAddCount;
+	}
+}
+
 void oskn_App_update(oskn_App* self) {
 	oskn_Time_add(&self->time, self->frameInterval);
 	oskn_Input_update(&self->input);
@@ -1189,6 +1251,7 @@ void oskn_App_update(oskn_App* self) {
 				oskn_ObjList_clear(&self->objList);
 				app_g.enemyAddCount = 0;
 				app_g.enemyAddCountMax = 8;
+				//app_g.enemyAddCountMax = 2;
 
 				oskn_App_createCamera(self);
 				oskn_App_createPlayer(self);
@@ -1254,39 +1317,7 @@ void oskn_App_update(oskn_App* self) {
 		++stateLoopI;
 	} while (nextState != oskn_AppState_None && stateLoopI < stateLoopLimit);
 
-	// 岩石の生成.
-	if (app_g.enemyAddCount < app_g.enemyAddCountMax) {
-		float spawnInterval = 2.0f;
-		INT32 prevSec = (INT32)((self->time.time - self->frameInterval) / spawnInterval);
-		INT32 sec = (INT32)(self->time.time / spawnInterval);
-
-
-		if (1.0f < self->time.time && (prevSec < sec)) {
-			// spawn
-			oskn_Vec2 pos = { 0 };
-			int n = 4 * rand() / RAND_MAX;
-			oskn_Vec2 rectMin = oskn_Rect_min(self->areaRect);
-			oskn_Vec2 rectMax = oskn_Rect_max(self->areaRect);
-			switch (n) {
-			case 0:
-			case 1:
-				pos.x = (n==0) ? rectMin.x : rectMax.x;
-				pos.y = self->areaRect.y + self->areaRect.height * rand() / RAND_MAX;
-				break;
-			case 2:
-			case 3:
-			default:
-				pos.x = self->areaRect.x + self->areaRect.width * rand() / RAND_MAX;
-				pos.y = (n == 2) ? rectMin.y : rectMax.y;
-				break;
-			}
-
-			oskn_Obj* obj = oskn_App_createEnemy(&app_g, pos, 3);
-
-			++app_g.enemyAddCount;
-		}
-	}
-
+	oskn_App_updateEnemySpawn(&app_g);
 	oskn_App_updateObj(self);
 }
 
