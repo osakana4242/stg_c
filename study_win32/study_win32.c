@@ -22,7 +22,6 @@
 #include <assert.h>
 
 // 型 
-
 typedef float oskn_Angle;
 
 typedef struct _oskn_Time {
@@ -165,6 +164,8 @@ typedef enum _oskn_AppState {
 
 typedef struct _oskn_App {
 	oskn_ObjList objList;
+	/// <summary>1フレーム前の状態をまるっと保存</summary>
+	oskn_ObjList prevObjList;
 	oskn_ObjId playerId;
 	oskn_ObjId cameraId;
 	float fps;
@@ -301,6 +302,10 @@ oskn_Vec2 oskn_Vec2Util_mulF(oskn_Vec2 a, float f) {
 	return a;
 }
 
+float oskn_Vec2Util_dot(oskn_Vec2 a, oskn_Vec2 b) {
+	return a.x * b.x + a.y * b.y;
+}
+
 oskn_Vec2 oskn_Vec2Util_moveTowards(oskn_Vec2 current, oskn_Vec2 target, float maxDelta) {
 	oskn_Vec2 deltaVec = oskn_Vec2Util_subVec2(target, current);
 	oskn_Vec2 v = oskn_Vec2_normalize(deltaVec);
@@ -430,6 +435,7 @@ bool oskn_Obj_isNeedHitTest(const oskn_Obj* self, const oskn_Obj* other) {
 		}
 	case oskn_ObjType_Enemy:
 		switch (type2) {
+		case oskn_ObjType_Enemy:
 		case oskn_ObjType_Player:
 		case oskn_ObjType_PlayerBullet:
 			return true;
@@ -460,6 +466,21 @@ bool oskn_ObjList_init(oskn_ObjList* self, int capacity) {
 		item->destroyed = true;
 	}
 
+	return true;
+}
+
+bool oskn_ObjList_copyFrom(oskn_ObjList* self, const oskn_ObjList* other) {
+	if (self->capacity != other->capacity) {
+		assert("unko");
+		return false;
+	}
+	for (int i = 0, iCount = other->capacity; i < iCount; ++i) {
+		self->totalList[i] = other->totalList[i];
+	}
+	for (int i = 0, iCount = other->activeIdListCount; i < iCount; ++i) {
+		self->activeIdList[i] = other->activeIdList[i];
+	}
+	self->nextId = other->nextId;
 	return true;
 }
 
@@ -559,9 +580,83 @@ oskn_Obj* oskn_App_createEnemy(oskn_App* self, oskn_Vec2 pos, UINT8 lv) {
 	obj->enemy.lv = lv;
 
 	obj->transform.rotation = self->time.time * 10.0f;
-	obj->enemy.speed = 25.0f + 75.0f * rand() / RAND_MAX / lv;
+	float speed = 25.0f + 75.0f * rand() / RAND_MAX / lv;
+	obj->rigidbody.enabled = true;
+	obj->rigidbody.velocity = oskn_Vec2Util_mulF(oskn_Vec2Util_fromAngle(obj->transform.rotation), speed);
 
 	return obj;
+}
+
+oskn_Vec2 oskn_App_reflectVec(oskn_Vec2 v, oskn_Vec2 n) {
+	oskn_Vec2 iv = oskn_Vec2Util_mulF(v, -1);
+	float a = oskn_Vec2Util_dot(iv, n);
+	//// 壁に平行なベクトル.
+	//oskn_Vec2 wallVec = oskn_Vec2Util_addVec2(v, oskn_Vec2Util_mulF(n, a));
+	oskn_Vec2 r = oskn_Vec2Util_addVec2(v, oskn_Vec2Util_mulF(n, 2 * a));
+	return r;
+}
+
+void oskn_App_reflectObj(oskn_Obj* aObj, const oskn_Obj* bObj, oskn_Vec2 hitPos) {
+	oskn_Vec2 pos = aObj->transform.position;
+	// oskn_Vec2 toPrev = oskn_Vec2Util_subVec2(prevObj->transform.position, pos);
+	//oskn_Vec2 toPrev = oskn_Vec2Util_mulF(aObj->rigidbody.velocity, -1);
+	//oskn_Vec2 toPrevN = oskn_Vec2_normalize(toPrev);
+	//pos = oskn_Vec2Util_addVec2(hitPos, oskn_Vec2Util_mulF(toPrevN, aObj->collider.radius));
+
+	oskn_Vec2 toHitPos = oskn_Vec2Util_subVec2(hitPos, pos);
+	oskn_Vec2 toHitPosN = oskn_Vec2_normalize(toHitPos);
+	oskn_Vec2 reflectVecN = oskn_Vec2Util_mulF(toHitPosN, -1);
+	oskn_Vec2 reflectVec = oskn_Vec2Util_mulF(reflectVecN, aObj->collider.radius);
+	pos = oskn_Vec2Util_addVec2(hitPos, reflectVec);
+	oskn_Vec2 v = aObj->rigidbody.velocity;
+	float dot = oskn_Vec2Util_dot(v, toHitPos);
+	if (0 < dot) {
+		oskn_Vec2 r = oskn_App_reflectVec(v, reflectVecN);
+		aObj->rigidbody.velocity = r;
+	}
+	aObj->transform.position = pos;
+}
+
+bool testReflect2(oskn_Obj* aObj, oskn_Obj* bObj, oskn_Vec2* outHitPos) {
+	oskn_Vec2 aPos = aObj->transform.position;
+	oskn_Collider aCol = aObj->collider;
+	oskn_Vec2 bPos = bObj->transform.position;
+	oskn_Collider bCol = bObj->collider;
+
+	float radius = aCol.radius + bCol.radius;
+	float sqrRadius = radius * radius;
+	oskn_Vec2 aToB = oskn_Vec2Util_subVec2(bPos, aPos);
+	float sqrDistance = oskn_Vec2_sqrMagnitude(aToB);
+	bool isHit = sqrDistance < sqrRadius;
+	if (!isHit) return false;
+	oskn_Vec2 hitPos = oskn_Vec2Util_addVec2(aPos, oskn_Vec2Util_mulF(aToB, 0.5f));
+	*outHitPos = hitPos;
+	oskn_App_reflectObj(aObj, bObj, hitPos);
+	oskn_App_reflectObj(bObj, aObj, hitPos);
+	return true;
+}
+
+void testReflect1() {
+	oskn_Obj aObj = { 0 };
+	oskn_Obj bObj = { 0 };
+
+	aObj.transform.position = oskn_Vec2Util_create(0, 0);
+	aObj.collider.radius = 1;
+	aObj.rigidbody.velocity = oskn_Vec2Util_create(1, 1);
+	bObj.transform.position = oskn_Vec2Util_create(1, 1);
+	bObj.collider.radius = 1;
+	bObj.rigidbody.velocity = oskn_Vec2Util_create(-1, -1);
+
+	// 0 1 2 3 4 5
+	// |   ]
+	//   [   |
+
+	oskn_Vec2 hitPos;
+	assert(testReflect2(&aObj, &bObj, &hitPos));
+	assert(hitPos.x == 0.5f);
+	assert(aObj.rigidbody.velocity.x < 0);
+	assert(0 < bObj.rigidbody.velocity.x);
+	assert(!testReflect2(&aObj, &bObj, &hitPos));
 }
 
 void oskn_App_test(oskn_App* self) {
@@ -605,12 +700,30 @@ void oskn_App_test(oskn_App* self) {
 		actual = oskn_Vec2_toAngle(oskn_Vec2Util_create(0.0f, -1.0f));
 		assert(oskn_Float_roundEq(expected, actual, 0.01f));
 	}
+	{
+		oskn_Vec2 expected;
+		oskn_Vec2 actual;
+
+		expected = oskn_Vec2Util_create(-1, 1);
+		actual = oskn_App_reflectVec(oskn_Vec2Util_create(1, 1), oskn_Vec2Util_create(-1, 0));
+		assert(oskn_Vec2_eq(expected, actual));
+
+		expected = oskn_Vec2Util_create(1, -1);
+		actual = oskn_App_reflectVec(oskn_Vec2Util_create(-1, -1), oskn_Vec2Util_create(1, 0));
+		assert(oskn_Vec2_eq(expected, actual));
+
+		expected = oskn_Vec2Util_create(-2, -2);
+		actual = oskn_App_reflectVec(oskn_Vec2Util_create(2, 2), oskn_Vec2_normalize(oskn_Vec2Util_create(-1, -1)));
+		assert(oskn_Vec2_roundEq(expected, actual, 0.01f));
+	}
+	testReflect1();
 }
 
 bool oskn_App_init(oskn_App* self, HWND hWnd) {
 	oskn_App_test(self);
 
 	oskn_ObjList_init(&self->objList, 255);
+	oskn_ObjList_init(&self->prevObjList, self->objList.capacity);
 	self->screenSize.x = 320;
 	self->screenSize.y = 240;
 	self->fps = 60.0f;
@@ -631,7 +744,7 @@ bool oskn_App_init(oskn_App* self, HWND hWnd) {
 	return true;
 }
 
-void oskn_App_onHitObj(oskn_App* self, oskn_Obj* aObj, oskn_Obj* bObj) {
+void oskn_App_onHitObj(oskn_App* self, oskn_Obj* aObj, oskn_Obj* bObj, oskn_Vec2 hitPos) {
 	switch (aObj->type) {
 	case oskn_ObjType_Player: {
 		switch (bObj->type) {
@@ -677,7 +790,12 @@ void oskn_App_onHitObj(oskn_App* self, oskn_Obj* aObj, oskn_Obj* bObj) {
 		break;
 	}
 	case oskn_ObjType_Enemy: {
-		if (bObj->type == oskn_ObjType_PlayerBullet) {
+		if (bObj->type == oskn_ObjType_Enemy) {
+			oskn_Obj* prevObj = oskn_ObjList_getById(&app_g.prevObjList, aObj->id);
+			if (NULL != prevObj) {
+				oskn_App_reflectObj(aObj, bObj, hitPos);
+			}
+		} else if (bObj->type == oskn_ObjType_PlayerBullet) {
 			aObj->enemy.hp -= bObj->bullet.damage;
 			if (aObj->enemy.hp <= 0) {
 				if (1 < aObj->enemy.lv) {
@@ -887,35 +1005,30 @@ void oskn_App_updateObj(oskn_App* self) {
 			break;
 		}
 		case oskn_ObjType_Enemy: {
-			oskn_Vec2 vec = oskn_Vec2Util_fromAngle(obj->transform.rotation);
-			float speed = obj->enemy.speed * app_g.time.deltaTime;
-			vec.x *= speed;
-			vec.y *= speed;
 			oskn_Vec2 pos = obj->transform.position;
-			pos.x += vec.x;
-			pos.y += vec.y;
+			oskn_Vec2 vec = obj->rigidbody.velocity;
 			oskn_Vec2 rectMin = oskn_Rect_min(app_g.areaRect);
 			oskn_Vec2 rectMax = oskn_Rect_max(app_g.areaRect);
 
 			if (pos.x - obj->collider.radius < rectMin.x) {
-				vec.x *= -1;
+				vec = oskn_App_reflectVec(vec, oskn_Vec2_normalize(oskn_Vec2Util_create(1, 0)));
 				pos.x = rectMin.x + obj->collider.radius;
 			}
 			else if (rectMax.x <= pos.x + obj->collider.radius) {
-				vec.x *= -1;
+				vec = oskn_App_reflectVec(vec, oskn_Vec2_normalize(oskn_Vec2Util_create(-1, 0)));
 				pos.x = rectMax.x - obj->collider.radius;
 			}
 
 			if (pos.y - obj->collider.radius < rectMin.y) {
-				vec.y *= -1;
+				vec = oskn_App_reflectVec(vec, oskn_Vec2_normalize(oskn_Vec2Util_create(0, 1)));
 				pos.y = rectMin.y + obj->collider.radius;
 			}
 			else if (rectMax.y <= pos.y + obj->collider.radius) {
-				vec.y *= -1;
+				vec = oskn_App_reflectVec(vec, oskn_Vec2_normalize(oskn_Vec2Util_create(0, -1)));
 				pos.y = rectMax.y - obj->collider.radius;
 			}
 			obj->transform.position = pos;
-			obj->transform.rotation = oskn_Vec2_toAngle(vec);
+			obj->rigidbody.velocity = vec;
 			break;
 		}
 		case oskn_ObjType_Fuel: {
@@ -983,13 +1096,14 @@ void oskn_App_updateObj(oskn_App* self) {
 
 			float radius = aCol.radius + bCol.radius;
 			float sqrRadius = radius * radius;
-			oskn_Vec2 d;
-			d.x = bPos.x - aPos.x;
-			d.y = bPos.y - aPos.y;
-			bool isHit = oskn_Vec2_sqrMagnitude(d) < sqrRadius;
+			oskn_Vec2 aToB = oskn_Vec2Util_subVec2(bPos, aPos);
+			float sqrDistance = oskn_Vec2_sqrMagnitude(aToB);
+			bool isHit = sqrDistance < sqrRadius;
 			if (!isHit) continue;
-			oskn_App_onHitObj(self, aObj, bObj);
-			oskn_App_onHitObj(self, bObj, aObj);
+			oskn_Vec2 hitPos = oskn_Vec2Util_addVec2(aPos, oskn_Vec2Util_mulF(aToB, 0.5f));
+
+			oskn_App_onHitObj(self, aObj, bObj, hitPos);
+			oskn_App_onHitObj(self, bObj, aObj, hitPos);
 		}
 	}
 
@@ -999,6 +1113,8 @@ void oskn_App_updateObj(oskn_App* self) {
 		if (obj->destroyTime < app_g.time.time) continue;
 		oskn_ObjList_removeById(objList, id);
 	}
+
+	oskn_ObjList_copyFrom(&self->prevObjList, &self->objList);
 }
 
 void oskn_App_createCamera(oskn_App* self) {
