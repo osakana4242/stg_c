@@ -1488,6 +1488,10 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 		else {
 			UINT64 time = GetTickCount64();
 			float deltaTime = (INT32)(time - prevTime) * 0.001f;
+			if (0.1f < deltaTime) {
+				// 差分がありすぎるときはブレークポイントかけてるときとみなす.
+				deltaTime = app_g.frameInterval;
+			}
 			totalTime += deltaTime;
 			prevTime = time;
 			if (totalTime < app_g.frameInterval) {
