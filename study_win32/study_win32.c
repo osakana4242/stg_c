@@ -1209,6 +1209,20 @@ void draw(HWND hWnd) {
 		if (camera->type != oskn_ObjType_Camera) continue;
 		oskn_Vec2 cameraOffset = oskn_Vec2Util_mulF(oskn_Vec2Util_addVec2(camera->transform.position, oskn_Vec2Util_mulF(app_g.screenSize, -0.5f)), -1.0f);
 
+		{
+			// areaRect の描画.
+			HBRUSH hBrash = CreateSolidBrush(RGB(0xff, 0x00, 0xff));
+
+			oskn_Vec2 rMin = oskn_Vec2Util_addVec2(oskn_Rect_min(app_g.areaRect), cameraOffset);
+			oskn_Vec2 rMax = oskn_Vec2Util_addVec2(oskn_Rect_max(app_g.areaRect), cameraOffset);
+			RECT r = { (int)rMin.x, (int)rMin.y, (int)rMax.x, (int)rMax.y };
+			FrameRect(hdc, &r, hBrash);
+
+			HBRUSH hBrashPrev = SelectObject(hdc, hBrash);
+			SelectObject(hdc, hBrashPrev);
+			DeleteObject(hBrash);
+		}
+
 		for (int i = 0, iCount = app_g.objList.activeIdListCount; i < iCount; ++i) {
 			oskn_ObjId id = app_g.objList.activeIdList[i];
 			oskn_Obj* obj = oskn_ObjList_getById(&app_g.objList, id);
@@ -1245,9 +1259,16 @@ void draw(HWND hWnd) {
 			rc.right  = (int)(rc.left + (obj->collider.radius * 2.0f));
 			rc.bottom = (int)(rc.top  + (obj->collider.radius * 2.0f));
 			HBRUSH hBrash = CreateSolidBrush(rgb);
-			FillRect(hdc, &rc, hBrash);
-			// wsprintf(str, TEXT("%d"), obj->id.id);
-			// TextOut(hdc, rc.left, rc.top, str, lstrlen(str));
+			HPEN hPen = CreatePen(PS_SOLID, 1, rgb);
+			//FillRect(hdc, &rc, hBrash);
+			HBRUSH hBrashPrev = SelectObject(hdc, hBrash);
+			HPEN hPenPrev = SelectObject(hdc, hPen);
+			Ellipse(hdc, rc.left, rc.top, rc.right, rc.bottom);
+			//wsprintf(str, TEXT("%d"), obj->id.id);
+			//TextOut(hdc, rc.left, rc.top, str, lstrlen(str));
+			SelectObject(hdc, hPenPrev);
+			SelectObject(hdc, hBrashPrev);
+			DeleteObject(hPen);
 			DeleteObject(hBrash);
 		}
 	}
