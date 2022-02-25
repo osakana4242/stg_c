@@ -188,9 +188,12 @@ typedef struct _oskn_App {
 // 定数、グローバル変数 
 
 /// <summary>衝突検証モード. プレイヤー無敵, ステージを狭める. 岩の配置を固定.</summary>
-bool OSKN_COL_TEST_ENABLED = true;
+bool OSKN_COL_TEST_ENABLED = false;
+/// <summary>衝突時に位置を補正する.</summary>
+bool OSKN_COL_POS_ADJUST_ENABLED = false;
 
 #define ANGLE_PI 3.141592f
+#define DEG_TO_RAD (ANGLE_PI / 180.0f)
 #define DEG_TO_RAD (ANGLE_PI / 180.0f)
 #define RAD_TO_DEG (180.0f / ANGLE_PI)
 
@@ -620,7 +623,10 @@ void oskn_App_reflectObj(oskn_Obj* aObj, const oskn_Obj* bObj, oskn_Vec2 hitPos)
 		oskn_Vec2 r = oskn_App_reflectVec(v, reflectVecN);
 		aObj->rigidbody.velocity = r;
 	}
-	aObj->transform.position = pos;
+
+	if (OSKN_COL_POS_ADJUST_ENABLED) {
+		aObj->transform.position = pos;
+	}
 }
 
 bool testReflect2(oskn_Obj* aObj, oskn_Obj* bObj, oskn_Vec2* outHitPos) {
@@ -643,6 +649,8 @@ bool testReflect2(oskn_Obj* aObj, oskn_Obj* bObj, oskn_Vec2* outHitPos) {
 }
 
 void testReflect1() {
+	if (!OSKN_COL_POS_ADJUST_ENABLED) return;
+
 	oskn_Obj aObj = { 0 };
 	oskn_Obj bObj = { 0 };
 
@@ -737,8 +745,8 @@ bool oskn_App_init(oskn_App* self, HWND hWnd) {
 	if (OSKN_COL_TEST_ENABLED) {
 		self->areaRect.x = 0;
 		self->areaRect.y = 0;
-		self->areaRect.width = 150;
-		self->areaRect.height = 150;
+		self->areaRect.width = 100;
+		self->areaRect.height = 100;
 	} else {
 		self->areaRect.x = -64;
 		self->areaRect.y = -64;
