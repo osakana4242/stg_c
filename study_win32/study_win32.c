@@ -193,7 +193,7 @@ typedef struct _oskn_App {
 // 定数、グローバル変数 
 
 /// <summary>衝突検証モード. プレイヤー無敵, ステージを狭める. 岩の配置を固定.</summary>
-bool OSKN_COL_TEST_ENABLED = true;
+bool OSKN_COL_TEST_ENABLED = false;
 /// <summary>衝突時に位置を補正する.</summary>
 bool OSKN_COL_POS_ADJUST_ENABLED = true;
 
@@ -749,44 +749,122 @@ bool testReflect2(oskn_Obj* aObj, oskn_Obj* bObj, float deltaTime, oskn_Vec2* ou
 
 void testReflect1() {
 	if (!OSKN_COL_POS_ADJUST_ENABLED) return;
+	// 静止してる a に b が突っ込むパターン.
+	// 1. b が半分めり込む:
+	// 対処: 両者が重なる直前の位置に巻き戻す + 移動ベクトルを反射する.
+	//  x: 012345678901234567890123456789
+	// a1:    [a1]
+	// b1:         [b1]
+	// a2:    [a2]
+	// b2:     [b2]
+	// a3:    [a3]
+	// b3:        [b3]
+	//
+	// 2. b が半径以上めり込む.
+	// 対処: 両者が重なる直前の位置に巻き戻す + 移動ベクトルを反射する.
+	//  x: 012345678901234567890123456789
+	// a1:    [a1]
+	// b1:         [b1]
+	// a2:    [a2]
+	// b2:   [b2]
+	// a3:    [a3]
+	// b3:        [b3]
+	//
+	// 3. すでにめり込んでて、動きが無い
+	// 対処: なにもしない
+	//  x: 012345678901234567890123456789
+	// a1:    [a1]
+	// b1:     [b1]
+	// a2:    [a2]
+	// b2:     [b2]
+	// a3:    [a3]
+	// b3:     [b3]
+	//
+	// 4. b がすでにめり込んでて、両者の中点側に進もうとしてる:
+	// 対処案1: 反対側に位置補正、ベクトルも反射する
+	// 対処案2: ベクトルを反射する
+	//  x: 012345678901234567890123456789
+	// a1:    [a1]
+	// b1:     [b1]
+	// a2:    [a2]
+	// b2:    [b2]
+	// a3:    [a3]
+	// b3:        [b3]
+	//
+	// 5. b がすでにめり込んでて、両者の中点の反対側に進もうとしてる:
+	// 案1: 進もうとしてる方向に位置補正
+	// 案2: ベクトル補正しない
+	//  x: 012345678901234567890123456789
+	// a1:    [a1]
+	// b1:     [b1]
+	// a2:    [a2]
+	// b2:      [b2]
+	// a3:    [a3]
+	// b3:        [b3]
 
 	oskn_Obj aObj = { 0 };
 	oskn_Obj bObj = { 0 };
+	oskn_Vec2 hitPos = { 0 };
 
-	aObj.transform.position = oskn_Vec2Util_create(0, 0);
-	aObj.collider.radius = 1;
-	aObj.rigidbody.velocity = oskn_Vec2Util_create(1, 1);
-	bObj.transform.position = oskn_Vec2Util_create(1, 1);
-	bObj.collider.radius = 1;
-	bObj.rigidbody.velocity = oskn_Vec2Util_create(-1, -1);
-
-	// 0 1 2 3 4 5
-	// |   ]
-	//   [   |
-
-	oskn_Vec2 hitPos;
-	assert(testReflect2(&aObj, &bObj, 0.5f, &hitPos));
-	aObj.transform.position = aObj.rigidbody.nextPos;
-	aObj.rigidbody.velocity= aObj.rigidbody.nextVelocity;
-	bObj.transform.position = bObj.rigidbody.nextPos;
-	bObj.rigidbody.velocity = bObj.rigidbody.nextVelocity;
-	assert(oskn_Float_roundEq(hitPos.x, 0.5f, 0.001f));
-	assert(aObj.rigidbody.velocity.x < 0);
-	assert(0 < bObj.rigidbody.velocity.x);
-	assert(!testReflect2(&aObj, &bObj, 0.5f, &hitPos));
-
-
-
-	aObj.transform.position = oskn_Vec2Util_create(0, 0);
-	aObj.collider.radius = 3;
+	// 1.
+	aObj.collider.radius = 2;
+	aObj.transform.position = oskn_Vec2Util_create(5, 0);
 	aObj.rigidbody.velocity = oskn_Vec2Util_create(0, 0);
-	bObj.collider.radius = 3;
-	bObj.transform.position = oskn_Vec2Util_create(1, 0);
+	bObj.collider.radius = 2;
+	bObj.transform.position = oskn_Vec2Util_create(7, 0);
+	bObj.rigidbody.velocity = oskn_Vec2Util_create(-3, 0);
+	assert(testReflect2(&aObj, &bObj, 1.0f, &hitPos));
+	assert(hitPos.x == 7.0f);
+	assert(bObj.rigidbody.nextPos.x == 9.0f);
+	assert(bObj.rigidbody.nextVelocity.x == 3.0f);
+
+	// 2.
+	aObj.collider.radius = 2;
+	aObj.transform.position = oskn_Vec2Util_create(5, 0);
+	aObj.rigidbody.velocity = oskn_Vec2Util_create(0, 0);
+	bObj.collider.radius = 2;
+	bObj.transform.position = oskn_Vec2Util_create(4, 0);
+	bObj.rigidbody.velocity = oskn_Vec2Util_create(-6, 0);
+	assert(testReflect2(&aObj, &bObj, 1.0f, &hitPos));
+	assert(hitPos.x == 7.0f);
+	assert(bObj.rigidbody.nextPos.x == 9.0f);
+	assert(bObj.rigidbody.nextVelocity.x == 6.0f);
+
+	// 3.
+	aObj.collider.radius = 2;
+	aObj.transform.position = oskn_Vec2Util_create(5, 0);
+	aObj.rigidbody.velocity = oskn_Vec2Util_create(0, 0);
+	bObj.collider.radius = 2;
+	bObj.transform.position = oskn_Vec2Util_create(6, 0);
+	bObj.rigidbody.velocity = oskn_Vec2Util_create(0, 0);
+	assert(testReflect2(&aObj, &bObj, 1.0f, &hitPos));
+	assert(hitPos.x == 5.5f);
+	assert(bObj.rigidbody.nextPos.x == 6.0f);
+	assert(bObj.rigidbody.nextVelocity.x == 0.0f);
+
+	// 4.
+	aObj.collider.radius = 2;
+	aObj.transform.position = oskn_Vec2Util_create(5, 0);
+	aObj.rigidbody.velocity = oskn_Vec2Util_create(0, 0);
+	bObj.collider.radius = 2;
+	bObj.transform.position = oskn_Vec2Util_create(6, 0);
 	bObj.rigidbody.velocity = oskn_Vec2Util_create(-1, 0);
-	assert(testReflect2(&aObj, &bObj, 0.5f, &hitPos));
-	assert(bObj.rigidbody.nextPos.x == 1.0f);
+	assert(testReflect2(&aObj, &bObj, 1.0f, &hitPos));
+	assert(hitPos.x == 5.5f);
+	assert(bObj.rigidbody.nextPos.x == 6.0f);
 	assert(bObj.rigidbody.nextVelocity.x == 1.0f);
 
+	// 5.
+	aObj.collider.radius = 2;
+	aObj.transform.position = oskn_Vec2Util_create(5, 0);
+	aObj.rigidbody.velocity = oskn_Vec2Util_create(0, 0);
+	bObj.collider.radius = 2;
+	bObj.transform.position = oskn_Vec2Util_create(6, 0);
+	bObj.rigidbody.velocity = oskn_Vec2Util_create(1, 0);
+	assert(testReflect2(&aObj, &bObj, 1.0f, &hitPos));
+	assert(hitPos.x == 5.5f);
+	assert(bObj.rigidbody.nextPos.x == 6.0f);
+	assert(bObj.rigidbody.nextVelocity.x == 1.0f);
 }
 
 void oskn_App_test(oskn_App* self) {
@@ -1330,8 +1408,8 @@ void oskn_App_updateEnemySpawn(oskn_App* self) {
 		obj = oskn_App_createEnemy(&app_g, oskn_Vec2Util_create(10, 50), 3);
 		obj->rigidbody.velocity = oskn_Vec2Util_create(20, 0);
 
-		obj = oskn_App_createEnemy(&app_g, oskn_Vec2Util_create(140, 70), 2);
-		obj->rigidbody.velocity = oskn_Vec2Util_create(-80, 0);
+		obj = oskn_App_createEnemy(&app_g, oskn_Vec2Util_create(140, 50), 2);
+		obj->rigidbody.velocity = oskn_Vec2Util_create(-40, 0);
 
 		//obj = oskn_App_createEnemy(&app_g, oskn_Vec2Util_create(140, 140), 2);
 		//obj->rigidbody.velocity = oskn_Vec2Util_create(0, -200);
@@ -1367,7 +1445,7 @@ void oskn_App_updateEnemySpawn(oskn_App* self) {
 			break;
 		}
 
-		oskn_App_createEnemy(&app_g, pos, 3);
+		oskn_App_createEnemy(&app_g, pos, 4);
 
 		++app_g.enemyAddCount;
 	}
