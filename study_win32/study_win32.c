@@ -197,10 +197,10 @@ bool OSKN_COL_TEST_ENABLED = false;
 /// <summary>衝突時に位置を補正する.</summary>
 bool OSKN_COL_POS_ADJUST_ENABLED = true;
 
-#define ANGLE_PI 3.141592f
-#define DEG_TO_RAD (ANGLE_PI / 180.0f)
-#define DEG_TO_RAD (ANGLE_PI / 180.0f)
-#define RAD_TO_DEG (180.0f / ANGLE_PI)
+#define OSKN_ANGLE_PI 3.141592f
+#define OSKN_DEG_TO_RAD (OSKN_ANGLE_PI / 180.0f)
+#define OSKN_DEG_TO_RAD (OSKN_ANGLE_PI / 180.0f)
+#define OSKN_RAD_TO_DEG (180.0f / OSKN_ANGLE_PI)
 
 HINSTANCE hInst_g = NULL;
 oskn_App app_g = { 0 };
@@ -240,7 +240,7 @@ float oskn_Float_moveTowards(float current, float target, float maxDelta) {
 }
 
 float oskn_Angle_toRad(oskn_Angle self) {
-	return (self) * DEG_TO_RAD;
+	return (self) * OSKN_DEG_TO_RAD;
 }
 
 float oskn_Angle_toDeg(oskn_Angle self) {
@@ -248,7 +248,7 @@ float oskn_Angle_toDeg(oskn_Angle self) {
 }
 
 oskn_Angle oskn_AngleUtil_fromRad(float rad) {
-	return rad * RAD_TO_DEG;
+	return rad * OSKN_RAD_TO_DEG;
 }
 
 
