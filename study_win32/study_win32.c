@@ -55,11 +55,21 @@ typedef struct _oskn_Rigidbody {
 	bool enabled;
 	oskn_Vec2 velocity;
 
+	INT32 hitCount;
+	/// <summary>1フレーム内で他者と衝突したタイミング. deltaTime の割合で表現. [0..1]</summary>
 	float hitT;
 	oskn_Vec2 nextVelocity;
-	oskn_Vec2 nextPos;
-	INT32 hitCount;
+	oskn_Vec2 nextPosition;
 } oskn_Rigidbody;
+
+typedef struct _oskn_HitInfo {
+	float t;
+	oskn_Vec2 hitPosition;
+	oskn_Vec2 aPosition;
+	oskn_Vec2 aVelocity;
+	oskn_Vec2 bPosition;
+	oskn_Vec2 bVelocity;
+} oskn_HitInfo;
 
 typedef enum _oskn_Key {
 	OSKN_KEY_NONE = 0,
@@ -82,6 +92,18 @@ typedef struct _oskn_ObjId {
 	INT32 id;
 	INT32 index;
 } oskn_ObjId;
+
+typedef struct _oskn_ObjHitInfo {
+	oskn_ObjId aId;
+	oskn_ObjId bId;
+	oskn_Vec2 hitPosition;
+} oskn_ObjHitInfo;
+
+typedef struct _oskn_ObjHitInfoList {
+	oskn_ObjHitInfo* list;
+	INT32 count;
+	INT32 capacity;
+} oskn_ObjHitInfoList;
 
 typedef struct _oskn_Player {
 	float hp;
@@ -171,6 +193,9 @@ typedef struct _oskn_App {
 	oskn_ObjList objList;
 	/// <summary>1フレーム前の状態をまるっと保存</summary>
 	oskn_ObjList prevObjList;
+
+	oskn_ObjHitInfoList hitInfoList;
+
 	oskn_ObjId playerId;
 	oskn_ObjId cameraId;
 	float fps;
@@ -193,7 +218,7 @@ typedef struct _oskn_App {
 // 定数、グローバル変数 
 
 /// <summary>衝突検証モード. プレイヤー無敵, ステージを狭める. 岩の配置を固定.</summary>
-bool OSKN_COL_TEST_ENABLED = false;
+bool OSKN_COL_TEST_ENABLED = true;
 /// <summary>衝突時に位置を補正する.</summary>
 bool OSKN_COL_POS_ADJUST_ENABLED = true;
 
@@ -487,8 +512,8 @@ bool oskn_Obj_isNeedHitTest(const oskn_Obj* self, const oskn_Obj* other) {
 
 bool oskn_ObjList_init(oskn_ObjList* self, int capacity) {
 	self->capacity = capacity;
-	self->totalList = calloc(self->capacity, sizeof(oskn_Obj));
-	self->activeIdList = calloc(self->capacity, sizeof(oskn_ObjId));
+	self->totalList = calloc(self->capacity, sizeof(*self->totalList));
+	self->activeIdList = calloc(self->capacity, sizeof(*self->activeIdList));
 	for (int i = 1, iCount = self->capacity; i < iCount; ++i) {
 		oskn_Obj* item = &self->totalList[i];
 		item->destroyed = true;
@@ -599,6 +624,45 @@ bool oskn_ObjList_clear(oskn_ObjList* self) {
 	return true;
 }
 
+
+bool oskn_ObjHitInfoList_init(oskn_ObjHitInfoList* self, int capacity) {
+	self->count = 0;
+	self->capacity = capacity;
+	self->list= calloc(self->capacity, sizeof(*self->list));
+	return true;
+}
+
+bool oskn_ObjHitInfoList_free(oskn_ObjHitInfoList* self) {
+	free(self->list);
+	self->list = NULL;
+	return true;
+}
+
+void oskn_ObjHitInfoList_clear(oskn_ObjHitInfoList* self) {
+	self->count = 0;
+}
+
+bool oskn_ObjHitInfoList_add(oskn_ObjHitInfoList* self, oskn_ObjHitInfo item) {
+	if (self->capacity < self->count) {
+		assert(false);
+		return false;
+	}
+	self->list[self->count] = item;
+	++self->count;
+	return true;
+}
+
+oskn_ObjHitInfo oskn_ObjHitInfoList_get(oskn_ObjHitInfoList* self, int index) {
+	if (index < 0 || self->count <= index) {
+		assert(false);
+		oskn_ObjHitInfo item = { 0 };
+		return item;
+	}
+	return self->list[index];
+}
+
+
+
 oskn_Obj* oskn_App_createEnemy(oskn_App* self, oskn_Vec2 pos, UINT8 lv) {
 	oskn_Obj* obj = oskn_ObjList_add(&app_g.objList);
 	obj->type = oskn_ObjType_Enemy;
@@ -643,7 +707,8 @@ bool oskn_App_tryGetReflectVecByHitPos(oskn_Vec2 pos, oskn_Vec2 velocity, oskn_V
 	}
 }
 
-void oskn_App_reflectObj(oskn_Obj* aObj, oskn_Obj* bObj, oskn_Vec2 aPrevPos, oskn_Vec2 bPrevPos, const oskn_Time* time, oskn_Vec2* outHitPos) {
+/// <summary>aObj, bObj が衝突した際の位置補正、ベクトル補正.</summary>
+bool oskn_App_reflectObj(const oskn_Obj* aObj, const oskn_Obj* bObj, oskn_Vec2 aPrevPos, oskn_Vec2 bPrevPos, const oskn_Time* time, oskn_HitInfo* outHitInfo) {
 	oskn_Vec2 aPos = aObj->transform.position;
 	oskn_Vec2 bPos = bObj->transform.position;
 	oskn_Vec2 aDelta = oskn_Vec2Util_subVec2(aPos, aPrevPos);
@@ -663,28 +728,19 @@ void oskn_App_reflectObj(oskn_Obj* aObj, oskn_Obj* bObj, oskn_Vec2 aPrevPos, osk
 	// (aVel - bVel) * t = - x + bPos - aPos
 	// t = (- x + bPos - aPos) / (aVel - bVel)
 	float t = 0.0f;
-	if (true) {
-		float vel = oskn_Vec2_magnitude(oskn_Vec2Util_subVec2(aDelta, bDelta));
-		float d2 = oskn_Vec2_magnitude(oskn_Vec2Util_subVec2(bPrevPos, aPrevPos));
-		t = (vel < 0.001f) ?
-			0.0f :
-			(d2 - hitD) / vel;
-	} else {
-		float vel = oskn_Math_abs(aObj->rigidbody.velocity.x - bObj->rigidbody.velocity.x);
-		float d2 = oskn_Math_abs(bPrevPos.x - aPrevPos.x);
-		t = (vel < 0.001f) ?
-			0.0f :
-			(d2 - hitD) / vel;
-	}
-	bool isStay = t < 0;
+	float vel = oskn_Vec2_magnitude(oskn_Vec2Util_subVec2(aDelta, bDelta));
+	float d2 = oskn_Vec2_magnitude(oskn_Vec2Util_subVec2(bPrevPos, aPrevPos));
+	t = (vel < 0.001f) ?
+		0.0f :
+		(d2 - hitD) / vel;
+
 	if (1.0f < t) {
-		// あたってない？？
-		assert(false);
-		return;
+		// 当たってない.
+		return false;
 	}
 
 	oskn_Vec2 hitPos;
-	if (t < 0) {
+	if (t <= 0) {
 		// お互い離れようとしてる.
 		// はじめからめり込んでる.
 		hitPos = oskn_Vec2Util_lerpUnclamped(aPos, bPos, 0.5f);
@@ -692,46 +748,28 @@ void oskn_App_reflectObj(oskn_Obj* aObj, oskn_Obj* bObj, oskn_Vec2 aPrevPos, osk
 	else {
 		aPos = oskn_Vec2Util_addVec2(aPrevPos, oskn_Vec2Util_mulF(aDelta, t));
 		bPos = oskn_Vec2Util_addVec2(bPrevPos, oskn_Vec2Util_mulF(bDelta, t));
-		hitPos = oskn_Vec2Util_lerpUnclamped(aPos, bPos, aObj->collider.radius / hitD);
 	}
-	*outHitPos = hitPos;
+	hitPos = oskn_Vec2Util_lerpUnclamped(aPos, bPos, aObj->collider.radius / hitD);
 
-	oskn_Vec2 r;
-	if ((aObj->rigidbody.hitT <= 0 || t <= aObj->rigidbody.hitT) &&
-		(bObj->rigidbody.hitT <= 0 || t <= bObj->rigidbody.hitT)) {
+	outHitInfo->hitPosition = hitPos;
+	outHitInfo->t = t;
 
-		if (aObj->rigidbody.hitT <= 0 || t <= aObj->rigidbody.hitT) {
-			aObj->rigidbody.hitT = t;
-			aObj->rigidbody.hitCount = 1;
-			oskn_App_tryGetReflectVecByHitPos(aPos, aObj->rigidbody.velocity, hitPos, &r);
-			// aObj->rigidbody.nextVelocity = oskn_Vec2Util_lerpUnclamped(aObj->rigidbody.nextVelocity, r, 1.0f / aObj->rigidbody.hitCount);
-			aObj->rigidbody.nextVelocity = oskn_Vec2Util_lerpUnclamped(aObj->rigidbody.nextVelocity, r, 1.0f);
-			if (OSKN_COL_POS_ADJUST_ENABLED) {
-				aObj->rigidbody.nextPos = oskn_Vec2Util_lerpUnclamped(aObj->rigidbody.nextPos, aPos, 1.0f / aObj->rigidbody.hitCount);
-			}
-			else {
-				aObj->rigidbody.nextPos = aObj->transform.position;
-			}
-		}
+	oskn_Vec2 reflectVec;
 
-		if (bObj->rigidbody.hitT <= 0 || t <= bObj->rigidbody.hitT) {
-			bObj->rigidbody.hitT = t;
-			bObj->rigidbody.hitCount = 1;
-			oskn_App_tryGetReflectVecByHitPos(bPos, bObj->rigidbody.velocity, hitPos, &r);
-			// bObj->rigidbody.nextVelocity = oskn_Vec2Util_lerpUnclamped(bObj->rigidbody.nextVelocity, r, 1.0f / bObj->rigidbody.hitCount);
-			bObj->rigidbody.nextVelocity = oskn_Vec2Util_lerpUnclamped(bObj->rigidbody.nextVelocity, r, 1.0f);
+	// a の位置補正, ベクトル補正.
+	oskn_App_tryGetReflectVecByHitPos(aPos, aObj->rigidbody.velocity, hitPos, &reflectVec);
+	outHitInfo->aVelocity = reflectVec;
+	outHitInfo->aPosition = OSKN_COL_POS_ADJUST_ENABLED ? aPos : aObj->transform.position;
 
-			if (OSKN_COL_POS_ADJUST_ENABLED) {
-				bObj->rigidbody.nextPos = oskn_Vec2Util_lerpUnclamped(bObj->rigidbody.nextPos, bPos, 1.0f / bObj->rigidbody.hitCount);
-			}
-			else {
-				bObj->rigidbody.nextPos = bObj->transform.position;
-			}
-		}
-	}
+	// b の位置補正, ベクトル補正.
+	oskn_App_tryGetReflectVecByHitPos(bPos, bObj->rigidbody.velocity, hitPos, &reflectVec);
+	outHitInfo->bVelocity = reflectVec;
+	outHitInfo->bPosition = OSKN_COL_POS_ADJUST_ENABLED ? bPos : bObj->transform.position;
+
+	return true;
 }
 
-bool testReflect2(oskn_Obj* aObj, oskn_Obj* bObj, float deltaTime, oskn_Vec2* outHitPos) {
+bool testReflect2(const oskn_Obj* aObj, const oskn_Obj* bObj, float deltaTime, oskn_HitInfo* outHitInfo) {
 	oskn_Vec2 aPos = aObj->transform.position;
 	oskn_Collider aCol = aObj->collider;
 	oskn_Vec2 bPos = bObj->transform.position;
@@ -747,7 +785,7 @@ bool testReflect2(oskn_Obj* aObj, oskn_Obj* bObj, float deltaTime, oskn_Vec2* ou
 	time.deltaTime = deltaTime;
 	oskn_Vec2 aPrevPos = oskn_Vec2Util_subVec2(aPos, oskn_Vec2Util_mulF(aObj->rigidbody.velocity, time.deltaTime));
 	oskn_Vec2 bPrevPos = oskn_Vec2Util_subVec2(bPos, oskn_Vec2Util_mulF(bObj->rigidbody.velocity, time.deltaTime));
-	oskn_App_reflectObj(aObj, bObj, aPrevPos, bPrevPos, &time, outHitPos);
+	oskn_App_reflectObj(aObj, bObj, aPrevPos, bPrevPos, &time, outHitInfo);
 	return true;
 }
 
@@ -808,7 +846,7 @@ void testReflect1() {
 
 	oskn_Obj aObj = { 0 };
 	oskn_Obj bObj = { 0 };
-	oskn_Vec2 hitPos = { 0 };
+	oskn_HitInfo hitInfo = { 0 };
 
 	// 1.
 	aObj.collider.radius = 2;
@@ -817,10 +855,10 @@ void testReflect1() {
 	bObj.collider.radius = 2;
 	bObj.transform.position = oskn_Vec2Util_create(7, 0);
 	bObj.rigidbody.velocity = oskn_Vec2Util_create(-3, 0);
-	assert(testReflect2(&aObj, &bObj, 1.0f, &hitPos));
-	assert(hitPos.x == 7.0f);
-	assert(bObj.rigidbody.nextPos.x == 9.0f);
-	assert(bObj.rigidbody.nextVelocity.x == 3.0f);
+	assert(testReflect2(&aObj, &bObj, 1.0f, &hitInfo));
+	assert(hitInfo.hitPosition.x == 7.0f);
+	assert(hitInfo.bPosition.x == 9.0f);
+	assert(hitInfo.bVelocity.x == 3.0f);
 
 	// 2.
 	aObj.collider.radius = 2;
@@ -829,10 +867,10 @@ void testReflect1() {
 	bObj.collider.radius = 2;
 	bObj.transform.position = oskn_Vec2Util_create(4, 0);
 	bObj.rigidbody.velocity = oskn_Vec2Util_create(-6, 0);
-	assert(testReflect2(&aObj, &bObj, 1.0f, &hitPos));
-	assert(hitPos.x == 7.0f);
-	assert(bObj.rigidbody.nextPos.x == 9.0f);
-	assert(bObj.rigidbody.nextVelocity.x == 6.0f);
+	assert(testReflect2(&aObj, &bObj, 1.0f, &hitInfo));
+	assert(hitInfo.hitPosition.x == 7.0f);
+	assert(hitInfo.bPosition.x == 9.0f);
+	assert(hitInfo.bVelocity.x == 6.0f);
 
 	// 3.
 	aObj.collider.radius = 2;
@@ -841,10 +879,10 @@ void testReflect1() {
 	bObj.collider.radius = 2;
 	bObj.transform.position = oskn_Vec2Util_create(6, 0);
 	bObj.rigidbody.velocity = oskn_Vec2Util_create(0, 0);
-	assert(testReflect2(&aObj, &bObj, 1.0f, &hitPos));
-	assert(hitPos.x == 5.5f);
-	assert(bObj.rigidbody.nextPos.x == 6.0f);
-	assert(bObj.rigidbody.nextVelocity.x == 0.0f);
+	assert(testReflect2(&aObj, &bObj, 1.0f, &hitInfo));
+	assert(hitInfo.hitPosition.x == 5.5f);
+	assert(hitInfo.bPosition.x == 6.0f);
+	assert(hitInfo.bVelocity.x == 0.0f);
 
 	// 4.
 	aObj.collider.radius = 2;
@@ -853,10 +891,10 @@ void testReflect1() {
 	bObj.collider.radius = 2;
 	bObj.transform.position = oskn_Vec2Util_create(6, 0);
 	bObj.rigidbody.velocity = oskn_Vec2Util_create(-1, 0);
-	assert(testReflect2(&aObj, &bObj, 1.0f, &hitPos));
-	assert(hitPos.x == 5.5f);
-	assert(bObj.rigidbody.nextPos.x == 6.0f);
-	assert(bObj.rigidbody.nextVelocity.x == 1.0f);
+	assert(testReflect2(&aObj, &bObj, 1.0f, &hitInfo));
+	assert(hitInfo.hitPosition.x == 5.5f);
+	assert(hitInfo.bPosition.x == 6.0f);
+	assert(hitInfo.bVelocity.x == 1.0f);
 
 	// 5.
 	aObj.collider.radius = 2;
@@ -865,10 +903,10 @@ void testReflect1() {
 	bObj.collider.radius = 2;
 	bObj.transform.position = oskn_Vec2Util_create(6, 0);
 	bObj.rigidbody.velocity = oskn_Vec2Util_create(1, 0);
-	assert(testReflect2(&aObj, &bObj, 1.0f, &hitPos));
-	assert(hitPos.x == 5.5f);
-	assert(bObj.rigidbody.nextPos.x == 6.0f);
-	assert(bObj.rigidbody.nextVelocity.x == 1.0f);
+	assert(testReflect2(&aObj, &bObj, 1.0f, &hitInfo));
+	assert(hitInfo.hitPosition.x == 5.5f);
+	assert(hitInfo.bPosition.x == 6.0f);
+	assert(hitInfo.bVelocity.x == 1.0f);
 }
 
 void oskn_App_test(oskn_App* self) {
@@ -936,6 +974,7 @@ bool oskn_App_init(oskn_App* self, HWND hWnd) {
 
 	oskn_ObjList_init(&self->objList, 255);
 	oskn_ObjList_init(&self->prevObjList, self->objList.capacity);
+	oskn_ObjHitInfoList_init(&self->hitInfoList, 255);
 	self->screenSize.x = 320;
 	self->screenSize.y = 240;
 	self->fps = 60.0f;
@@ -1268,9 +1307,11 @@ void oskn_App_updateObj(oskn_App* self) {
 		oskn_Vec2 v = oskn_Vec2Util_mulF(aObj->rigidbody.velocity, app_g.time.deltaTime);
 		pos = oskn_Vec2Util_addVec2(pos, v);
 		aObj->transform.position = pos;
+		aObj->rigidbody.hitT = 1.0f;
 	}
 
 	// 衝突判定.
+	oskn_ObjHitInfoList_clear(&self->hitInfoList);
 	for (int i = 0, iCount = objList->activeIdListCount; i < iCount; ++i) {
 		oskn_ObjId aId = objList->activeIdList[i];
 		oskn_Obj* aObj = oskn_ObjList_getById(objList, aId);
@@ -1291,18 +1332,41 @@ void oskn_App_updateObj(oskn_App* self) {
 			float sqrDistance = oskn_Vec2_sqrMagnitude(aToB);
 			bool isHit = sqrDistance < sqrRadius;
 			if (!isHit) continue;
-			oskn_Obj aObjTemp = *aObj;
+			//oskn_Obj aObjTemp = *aObj;
 			oskn_Vec2 hitPos = { 0 };
 			if (aObj->type == oskn_ObjType_Enemy && bObj->type == oskn_ObjType_Enemy) {
 				oskn_Obj* prevAObj = oskn_ObjList_getById(&app_g.prevObjList, aObj->id);
 				oskn_Obj* prevBObj = oskn_ObjList_getById(&app_g.prevObjList, bObj->id);
 				if (NULL != prevAObj && NULL != prevBObj) {
-					oskn_App_reflectObj(aObj, bObj, prevAObj->transform.position, prevBObj->transform.position, &app_g.time, &hitPos);
+					oskn_HitInfo hitInfo = { 0 };
+					if (!oskn_App_reflectObj(aObj, bObj, prevAObj->transform.position, prevBObj->transform.position, &app_g.time, &hitInfo)) {
+						assert(false);
+					}
+					hitPos = hitInfo.hitPosition;
+					aObj->rigidbody.nextPosition = hitInfo.aPosition;
+					aObj->rigidbody.nextVelocity = hitInfo.aVelocity;
+					++aObj->rigidbody.hitCount;
+					bObj->rigidbody.nextPosition = hitInfo.bPosition;
+					bObj->rigidbody.nextVelocity = hitInfo.bVelocity;
+					++bObj->rigidbody.hitCount;
 				}
 			}
-			oskn_App_onHitObj(self, aObj, bObj, hitPos);
-			oskn_App_onHitObj(self, bObj, &aObjTemp, hitPos);
+			oskn_ObjHitInfo h = { 0 };
+			h.aId = aObj->id;
+			h.bId = bObj->id;
+			h.hitPosition = hitPos;
+			oskn_ObjHitInfoList_add(&self->hitInfoList, h);
+			//oskn_App_onHitObj(self, aObj, bObj, hitPos);
+			//oskn_App_onHitObj(self, bObj, &aObjTemp, hitPos);
 		}
+	}
+
+	for (int i = 0, iCount = self->hitInfoList.count; i < iCount; ++i) {
+		oskn_ObjHitInfo h = oskn_ObjHitInfoList_get(&self->hitInfoList, i);
+		oskn_Obj* aObj = oskn_ObjList_getById(objList, h.aId);
+		oskn_Obj* bObj = oskn_ObjList_getById(objList, h.bId);
+		oskn_App_onHitObj(self, aObj, bObj, h.hitPosition);
+		oskn_App_onHitObj(self, bObj, aObj, h.hitPosition);
 	}
 
 	// 位置補正、反射ベクトルの反映.
@@ -1310,7 +1374,7 @@ void oskn_App_updateObj(oskn_App* self) {
 		oskn_ObjId aId = objList->activeIdList[i];
 		oskn_Obj* aObj = oskn_ObjList_getById(objList, aId);
 		if (aObj->rigidbody.hitCount <= 0) continue;
-		aObj->transform.position = aObj->rigidbody.nextPos;
+		aObj->transform.position = aObj->rigidbody.nextPosition;
 		aObj->rigidbody.velocity = aObj->rigidbody.nextVelocity;
 		aObj->rigidbody.hitCount = 0;
 		aObj->rigidbody.hitT = 0.0f;
@@ -1570,6 +1634,7 @@ void oskn_App_update(oskn_App* self) {
 
 bool oskn_App_free(oskn_App* self) {
 	oskn_ObjList_free(&self->objList);
+	oskn_ObjHitInfoList_free(&self->hitInfoList);
 	return true;
 }
 
