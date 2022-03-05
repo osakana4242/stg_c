@@ -208,6 +208,10 @@ oskn_App app_g = { 0 };
 
 // 関数 
 
+float oskn_Math_abs(float v) {
+	return (v < 0) ? -v : v;
+}
+
 float oskn_Math_clamp(float v, float vMin, float vMax) {
 	return (v < vMin) ? vMin :
 	                    (vMax < v) ? vMax :
@@ -666,8 +670,8 @@ void oskn_App_reflectObj(oskn_Obj* aObj, oskn_Obj* bObj, oskn_Vec2 aPrevPos, osk
 			0.0f :
 			(d2 - hitD) / vel;
 	} else {
-		float vel = abs(aObj->rigidbody.velocity.x - bObj->rigidbody.velocity.x);
-		float d2 = abs(bPrevPos.x - aPrevPos.x);
+		float vel = oskn_Math_abs(aObj->rigidbody.velocity.x - bObj->rigidbody.velocity.x);
+		float d2 = oskn_Math_abs(bPrevPos.x - aPrevPos.x);
 		t = (vel < 0.001f) ?
 			0.0f :
 			(d2 - hitD) / vel;
@@ -1892,7 +1896,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 			}
 			bool isQuit = msg.message == WM_QUIT;
 			if (isQuit) {
-				return msg.wParam;
+				return (int)msg.wParam;
 			}
 			DispatchMessage(&msg);
 		}
