@@ -60,6 +60,8 @@ typedef struct _oskn_Rigidbody {
 	float hitT;
 	oskn_Vec2 nextVelocity;
 	oskn_Vec2 nextPosition;
+	/// <summary>他のものにぶつかっても位置補正、ベクトル補正を行わない</summary>
+	bool isTrigger;
 } oskn_Rigidbody;
 
 typedef struct _oskn_HitInfo {
@@ -219,6 +221,7 @@ typedef struct _oskn_App {
 
 /// <summary>衝突検証モード. プレイヤー無敵, ステージを狭める. 岩の配置を固定.</summary>
 bool OSKN_COL_TEST_ENABLED = true;
+bool OSKN_COL_POS_ADJUST_DELAY_ENABLED = false;
 /// <summary>衝突時に位置を補正する.</summary>
 bool OSKN_COL_POS_ADJUST_ENABLED = true;
 
@@ -545,17 +548,26 @@ bool oskn_ObjList_free(oskn_ObjList* self) {
 	return true;
 }
 
-oskn_Obj* oskn_ObjList_getByIndex(oskn_ObjList* self, INT32 index) {
+oskn_Obj* oskn_ObjList_getByIndex(const oskn_ObjList* self, INT32 index) {
 	if (index < 0 || self->capacity <= index) return NULL;
 	return &self->totalList[index];
 }
 
-oskn_Obj* oskn_ObjList_getById(oskn_ObjList* self, oskn_ObjId id) {
+oskn_Obj* oskn_ObjList_getById(const oskn_ObjList* self, oskn_ObjId id) {
 	if (id.id == 0) return NULL;
 	oskn_Obj* obj = oskn_ObjList_getByIndex(self, id.index);
 	if (NULL == obj) return NULL;
 	if (!oskn_ObjId_eq(obj->id, id)) return NULL;
 	return obj;
+}
+
+bool oskn_ObjList_tryGetById(const oskn_ObjList* self, oskn_ObjId id, oskn_Obj** obj) {
+	*obj = NULL;
+	if (id.id == 0) return false;
+	*obj = oskn_ObjList_getByIndex(self, id.index);
+	if (NULL == obj) return false;
+	if (!oskn_ObjId_eq((*obj)->id, id)) return false;
+	return true;
 }
 
 oskn_Obj* oskn_ObjList_add(oskn_ObjList* self) {
@@ -1315,7 +1327,6 @@ void oskn_App_updateObj(oskn_App* self) {
 	for (int i = 0, iCount = objList->activeIdListCount; i < iCount; ++i) {
 		oskn_ObjId aId = objList->activeIdList[i];
 		oskn_Obj* aObj = oskn_ObjList_getById(objList, aId);
-		oskn_Vec2 aPos = aObj->transform.position;
 		oskn_Collider aCol = aObj->collider;
 
 		for (int j = i + 1, jCount = objList->activeIdListCount; j < jCount; ++j) {
@@ -1323,6 +1334,7 @@ void oskn_App_updateObj(oskn_App* self) {
 			oskn_Obj* bObj = oskn_ObjList_getById(objList, bId);
 			if (!oskn_Obj_isNeedHitTest(aObj, bObj)) continue;
 
+			oskn_Vec2 aPos = aObj->transform.position;
 			oskn_Vec2 bPos = bObj->transform.position;
 			oskn_Collider bCol = bObj->collider;
 
@@ -1334,50 +1346,70 @@ void oskn_App_updateObj(oskn_App* self) {
 			if (!isHit) continue;
 			//oskn_Obj aObjTemp = *aObj;
 			oskn_Vec2 hitPos = { 0 };
-			if (aObj->type == oskn_ObjType_Enemy && bObj->type == oskn_ObjType_Enemy) {
-				oskn_Obj* prevAObj = oskn_ObjList_getById(&app_g.prevObjList, aObj->id);
-				oskn_Obj* prevBObj = oskn_ObjList_getById(&app_g.prevObjList, bObj->id);
-				if (NULL != prevAObj && NULL != prevBObj) {
-					oskn_HitInfo hitInfo = { 0 };
-					if (!oskn_App_reflectObj(aObj, bObj, prevAObj->transform.position, prevBObj->transform.position, &app_g.time, &hitInfo)) {
-						assert(false);
-					}
-					hitPos = hitInfo.hitPosition;
+			bool isTrigger = aObj->rigidbody.isTrigger || bObj->rigidbody.isTrigger;
+			oskn_Obj* prevAObj;
+			if (!oskn_ObjList_tryGetById(&app_g.prevObjList, aObj->id, &prevAObj)) {
+				prevAObj = aObj;
+			}
+			oskn_Obj* prevBObj;
+			if (!oskn_ObjList_tryGetById(&app_g.prevObjList, bObj->id, &prevBObj)) {
+				prevBObj = bObj;
+			}
+			oskn_HitInfo hitInfo = { 0 };
+			if (!oskn_App_reflectObj(aObj, bObj, prevAObj->transform.position, prevBObj->transform.position, &app_g.time, &hitInfo)) {
+				assert(false);
+			}
+			hitPos = hitInfo.hitPosition;
+			if (!isTrigger) {
+				if (OSKN_COL_POS_ADJUST_DELAY_ENABLED) {
 					aObj->rigidbody.nextPosition = hitInfo.aPosition;
 					aObj->rigidbody.nextVelocity = hitInfo.aVelocity;
-					++aObj->rigidbody.hitCount;
 					bObj->rigidbody.nextPosition = hitInfo.bPosition;
 					bObj->rigidbody.nextVelocity = hitInfo.bVelocity;
-					++bObj->rigidbody.hitCount;
+				} else {
+					aObj->transform.position = hitInfo.aPosition;
+					aObj->rigidbody.velocity = hitInfo.aVelocity;
+					bObj->transform.position = hitInfo.bPosition;
+					bObj->rigidbody.velocity = hitInfo.bVelocity;
 				}
 			}
+
 			oskn_ObjHitInfo h = { 0 };
 			h.aId = aObj->id;
 			h.bId = bObj->id;
 			h.hitPosition = hitPos;
-			oskn_ObjHitInfoList_add(&self->hitInfoList, h);
-			//oskn_App_onHitObj(self, aObj, bObj, hitPos);
-			//oskn_App_onHitObj(self, bObj, &aObjTemp, hitPos);
+
+			if (OSKN_COL_POS_ADJUST_DELAY_ENABLED) {
+				++aObj->rigidbody.hitCount;
+				++bObj->rigidbody.hitCount;
+				oskn_ObjHitInfoList_add(&self->hitInfoList, h);
+			}
+			else {
+				oskn_App_onHitObj(self, aObj, bObj, h.hitPosition);
+				oskn_App_onHitObj(self, bObj, aObj, h.hitPosition);
+			}
 		}
 	}
 
-	for (int i = 0, iCount = self->hitInfoList.count; i < iCount; ++i) {
-		oskn_ObjHitInfo h = oskn_ObjHitInfoList_get(&self->hitInfoList, i);
-		oskn_Obj* aObj = oskn_ObjList_getById(objList, h.aId);
-		oskn_Obj* bObj = oskn_ObjList_getById(objList, h.bId);
-		oskn_App_onHitObj(self, aObj, bObj, h.hitPosition);
-		oskn_App_onHitObj(self, bObj, aObj, h.hitPosition);
-	}
+	if (OSKN_COL_POS_ADJUST_DELAY_ENABLED) {
+		// 位置補正、反射ベクトルの反映.
+		for (int i = 0, iCount = objList->activeIdListCount; i < iCount; ++i) {
+			oskn_ObjId aId = objList->activeIdList[i];
+			oskn_Obj* aObj = oskn_ObjList_getById(objList, aId);
+			if (aObj->rigidbody.hitCount <= 0) continue;
+			aObj->transform.position = aObj->rigidbody.nextPosition;
+			aObj->rigidbody.velocity = aObj->rigidbody.nextVelocity;
+			aObj->rigidbody.hitCount = 0;
+			aObj->rigidbody.hitT = 0.0f;
+		}
 
-	// 位置補正、反射ベクトルの反映.
-	for (int i = 0, iCount = objList->activeIdListCount; i < iCount; ++i) {
-		oskn_ObjId aId = objList->activeIdList[i];
-		oskn_Obj* aObj = oskn_ObjList_getById(objList, aId);
-		if (aObj->rigidbody.hitCount <= 0) continue;
-		aObj->transform.position = aObj->rigidbody.nextPosition;
-		aObj->rigidbody.velocity = aObj->rigidbody.nextVelocity;
-		aObj->rigidbody.hitCount = 0;
-		aObj->rigidbody.hitT = 0.0f;
+		for (int i = 0, iCount = self->hitInfoList.count; i < iCount; ++i) {
+			oskn_ObjHitInfo h = oskn_ObjHitInfoList_get(&self->hitInfoList, i);
+			oskn_Obj* aObj = oskn_ObjList_getById(objList, h.aId);
+			oskn_Obj* bObj = oskn_ObjList_getById(objList, h.bId);
+			oskn_App_onHitObj(self, aObj, bObj, h.hitPosition);
+			oskn_App_onHitObj(self, bObj, aObj, h.hitPosition);
+		}
 	}
 
 	// areaRect 衝突判定.
