@@ -221,6 +221,7 @@ typedef struct _oskn_App {
 
 /// <summary>衝突検証モード. プレイヤー無敵, ステージを狭める. 岩の配置を固定.</summary>
 bool OSKN_COL_TEST_ENABLED = true;
+bool OSKN_PLAYER_INVISIBLE_ENABLED = true;
 bool OSKN_COL_POS_ADJUST_DELAY_ENABLED = false;
 /// <summary>衝突時に位置を補正する.</summary>
 bool OSKN_COL_POS_ADJUST_ENABLED = true;
@@ -483,9 +484,6 @@ bool oskn_Obj_isNeedHitTest(const oskn_Obj* self, const oskn_Obj* other) {
 		case oskn_ObjType_Fuel:
 		case oskn_ObjType_Enemy:
 		case oskn_ObjType_EnemyBullet:
-			if (OSKN_COL_TEST_ENABLED) {
-				return false;
-			}
 			return true;
 		default: return false;
 		}
@@ -1028,6 +1026,9 @@ void oskn_App_onHitObj(oskn_App* self, oskn_Obj* aObj, const oskn_Obj* bObj, osk
 		default: {
 			if (0 < aObj->player.hp) {
 				aObj->player.hp -= 1;
+			}
+			if (OSKN_PLAYER_INVISIBLE_ENABLED) {
+				aObj->player.hp = 1;
 			}
 			break;
 		}
