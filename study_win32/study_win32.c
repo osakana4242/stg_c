@@ -219,8 +219,8 @@ typedef struct _oskn_App {
 
 // 定数、グローバル変数 
 
-/// <summary>衝突検証モード. プレイヤー無敵, ステージを狭める. 岩の配置を固定.</summary>
-bool OSKN_COL_TEST_ENABLED = true;
+/// <summary>衝突検証モード. ステージを狭める. 岩の配置を固定.</summary>
+bool OSKN_COL_TEST_ENABLED = false;
 bool OSKN_PLAYER_INVISIBLE_ENABLED = true;
 bool OSKN_COL_POS_ADJUST_DELAY_ENABLED = false;
 /// <summary>衝突時に位置を補正する.</summary>
@@ -998,8 +998,8 @@ bool oskn_App_init(oskn_App* self, HWND hWnd) {
 	} else {
 		self->areaRect.x = -64;
 		self->areaRect.y = -64;
-		self->areaRect.width = 320 * 2 + 128;
-		self->areaRect.height = 240 * 2 + 128;
+		self->areaRect.width = 320 * 1.5f + 128;
+		self->areaRect.height = 240 * 1.5f + 128;
 	}
 	HDC hdc;
 	RECT rc;
@@ -1057,6 +1057,7 @@ void oskn_App_onHitObj(oskn_App* self, oskn_Obj* aObj, const oskn_Obj* bObj, osk
 			float speed = 100.0f + 100.0f * rand() / RAND_MAX;
 			oskn_Vec2 vel = oskn_Vec2Util_mulF(vec, speed);
 			fuel->rigidbody.enabled = true;
+			fuel->rigidbody.isTrigger = true;
 			fuel->rigidbody.velocity = vel;
 		}
 		break;
@@ -1065,7 +1066,10 @@ void oskn_App_onHitObj(oskn_App* self, oskn_Obj* aObj, const oskn_Obj* bObj, osk
 		if (bObj->type == oskn_ObjType_Enemy) {
 		} else if (bObj->type == oskn_ObjType_PlayerBullet) {
 			aObj->enemy.hp -= bObj->bullet.damage;
-			if (aObj->enemy.hp <= 0) {
+			if (0 < aObj->enemy.hp) {
+				oskn_Vec2 v = oskn_Vec2Util_mulF(bObj->rigidbody.velocity, 0.005f);
+				aObj->rigidbody.velocity = oskn_Vec2Util_addVec2(aObj->rigidbody.velocity, v);
+			} else {
 				if (1 < aObj->enemy.lv) {
 					for (int i = 0; i < 4; ++i) {
 						float radius = aObj->collider.radius;
@@ -1195,6 +1199,8 @@ void oskn_App_updateObj(oskn_App* self) {
 
 							oskn_Obj* bullet = oskn_ObjList_add(&app_g.objList);
 							bullet->type = oskn_ObjType_PlayerBullet;
+							bullet->rigidbody.enabled = true;
+							bullet->rigidbody.isTrigger = true;
 							bullet->bullet.lv = shotLv;
 							bullet->bullet.damage = 1.0f;
 							bullet->bullet.speed = 400.0f;
@@ -1236,19 +1242,13 @@ void oskn_App_updateObj(oskn_App* self) {
 				if (!oskn_Input_hasKey(&app_g.input, OSKN_KEY_FIX)) {
 					obj->transform.rotation = oskn_Vec2_toAngle(move);
 				}
-
 				obj->transform.position = pos;
 			}
 			break;
 		}
 		case oskn_ObjType_PlayerBullet: {
-			oskn_Vec2 vec = oskn_Vec2Util_fromAngle(obj->transform.rotation);
-			float speed = obj->bullet.speed * app_g.time.deltaTime;
-			vec.x *= speed;
-			vec.y *= speed;
+			obj->rigidbody.velocity = oskn_Vec2Util_mulF(oskn_Vec2Util_fromAngle(obj->transform.rotation), 400.0f);
 			oskn_Vec2 pos = obj->transform.position;
-			pos.x += vec.x;
-			pos.y += vec.y;
 			oskn_Vec2 rectMin = oskn_Rect_min(app_g.areaRect);
 			oskn_Vec2 rectMax = oskn_Rect_max(app_g.areaRect);
 
@@ -1270,9 +1270,6 @@ void oskn_App_updateObj(oskn_App* self) {
 			if (isOutside) {
 				oskn_ObjList_requestRemoveById(objList, id, 0.0f);
 			}
-
-			obj->transform.position = pos;
-			obj->transform.rotation = oskn_Vec2_toAngle(vec);
 			break;
 		}
 		case oskn_ObjType_Enemy: {
@@ -1606,8 +1603,7 @@ void oskn_App_update(oskn_App* self) {
 			if (isEnter) {
 				oskn_ObjList_clear(&self->objList);
 				app_g.enemyAddCount = 0;
-				app_g.enemyAddCountMax = 8;
-				//app_g.enemyAddCountMax = 2;
+				app_g.enemyAddCountMax = 2;
 
 				oskn_App_createCamera(self);
 				oskn_App_createPlayer(self);
