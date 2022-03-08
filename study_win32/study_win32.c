@@ -553,20 +553,22 @@ oskn_Obj* oskn_ObjList_getByIndex(const oskn_ObjList* self, INT32 index) {
 	return &self->totalList[index];
 }
 
-oskn_Obj* oskn_ObjList_getById(const oskn_ObjList* self, oskn_ObjId id) {
-	if (id.id == 0) return NULL;
-	oskn_Obj* obj = oskn_ObjList_getByIndex(self, id.index);
-	if (NULL == obj) return NULL;
-	if (!oskn_ObjId_eq(obj->id, id)) return NULL;
-	return obj;
-}
-
+/// <summary>取得できなかったら false</summary>
 bool oskn_ObjList_tryGetById(const oskn_ObjList* self, oskn_ObjId id, oskn_Obj** obj) {
 	*obj = NULL;
 	if (id.id == 0) return false;
 	*obj = oskn_ObjList_getByIndex(self, id.index);
 	if (NULL == obj) return false;
 	if (!oskn_ObjId_eq((*obj)->id, id)) return false;
+	return true;
+}
+
+/// <summary>取得できなかったら assert 後に false. 必ず取得できるつもりのときはコチラを使う</summary>
+bool oskn_ObjList_getById(const oskn_ObjList* self, oskn_ObjId id, oskn_Obj** obj) {
+	if (!oskn_ObjList_tryGetById(self, id, obj)) {
+		assert(false);
+		return false;
+	}
 	return true;
 }
 
@@ -601,10 +603,8 @@ oskn_Obj* oskn_ObjList_add(oskn_ObjList* self) {
 }
 
 bool oskn_ObjList_requestRemoveById(oskn_ObjList* self, oskn_ObjId id, float time) {
-	oskn_Obj* obj = oskn_ObjList_getById(self, id);
-	if (NULL == obj) {
-		return false;
-	}
+	oskn_Obj* obj = NULL;
+	if (!oskn_ObjList_tryGetById(self, id, &obj)) return false;
 	obj->destroyTime = app_g.time.time + time;
 	return true;
 }
@@ -619,7 +619,8 @@ bool oskn_ObjList_removeById(oskn_ObjList* self, oskn_ObjId id) {
 		}
 		--self->activeIdListCount;
 
-		oskn_Obj* obj = oskn_ObjList_getById(self, id);
+		oskn_Obj* obj = NULL;
+		if (!oskn_ObjList_getById(self, id, &obj)) continue;
 		memset(obj, 0, sizeof(*obj));
 		obj->destroyed = true;
 		return true;
@@ -1088,13 +1089,16 @@ void oskn_App_updateObj(oskn_App* self) {
 
 	for (int i = 0, iCount = objList->activeIdListCount; i < iCount; ++i) {
 		oskn_ObjId id = objList->activeIdList[i];
-		oskn_Obj* obj = oskn_ObjList_getById(objList, id);
+		oskn_Obj* obj = NULL;
+		if (!oskn_ObjList_getById(objList, id, &obj)) {
+			return;
+		}
 
 		switch (obj->type) {
 		case oskn_ObjType_Camera: {
 			// プレイヤーを追従する.
-			oskn_Obj* target = oskn_ObjList_getById(&self->objList, self->playerId);
-			if (NULL != target) {
+			oskn_Obj* target = NULL;
+			if (oskn_ObjList_tryGetById(&self->objList, self->playerId, &target)) {
 				oskn_Vec2 pos = obj->transform.position;
 				oskn_Vec2 tpos = target->transform.position;
 
@@ -1124,8 +1128,8 @@ void oskn_App_updateObj(oskn_App* self) {
 		}
 		case oskn_ObjType_DirectionMarker: {
 			// 対象の前方を示す.
-			oskn_Obj* target = oskn_ObjList_getById(&self->objList, obj->directionMarker.ownerId);
-			if (NULL == target) {
+			oskn_Obj* target = NULL;
+			if (!oskn_ObjList_tryGetById(&self->objList, obj->directionMarker.ownerId, &target)) {
 				oskn_ObjList_requestRemoveById(&self->objList, obj->id, 0.0f);
 			} else {
 				oskn_Vec2 pos = obj->transform.position;
@@ -1274,8 +1278,8 @@ void oskn_App_updateObj(oskn_App* self) {
 			break;
 		}
 		case oskn_ObjType_Fuel: {
-			oskn_Obj* player = oskn_ObjList_getById(&app_g.objList, app_g.playerId);
-			if (NULL != player && 0.0f < player->player.hp) {
+			oskn_Obj* player = NULL;
+			if (oskn_ObjList_tryGetById(&app_g.objList, app_g.playerId, &player) && 0.0f < player->player.hp) {
 				// プレイヤーに吸い込まれる軌道.
 				// プレイヤーに近いほど吸い込まれる力が強くなる.
 				oskn_Vec2 toTargetVec = oskn_Vec2Util_subVec2(player->transform.position, obj->transform.position);
@@ -1313,7 +1317,8 @@ void oskn_App_updateObj(oskn_App* self) {
 	// rigidbody.
 	for (int i = 0, iCount = objList->activeIdListCount; i < iCount; ++i) {
 		oskn_ObjId aId = objList->activeIdList[i];
-		oskn_Obj* aObj = oskn_ObjList_getById(objList, aId);
+		oskn_Obj* aObj = NULL;
+		if (!oskn_ObjList_getById(objList, aId, &aObj)) continue;
 		if (!aObj->rigidbody.enabled) continue;
 		oskn_Vec2 pos = aObj->transform.position;
 		oskn_Vec2 v = oskn_Vec2Util_mulF(aObj->rigidbody.velocity, app_g.time.deltaTime);
@@ -1326,12 +1331,14 @@ void oskn_App_updateObj(oskn_App* self) {
 	oskn_ObjHitInfoList_clear(&self->hitInfoList);
 	for (int i = 0, iCount = objList->activeIdListCount; i < iCount; ++i) {
 		oskn_ObjId aId = objList->activeIdList[i];
-		oskn_Obj* aObj = oskn_ObjList_getById(objList, aId);
+		oskn_Obj* aObj = NULL;
+		if (!oskn_ObjList_getById(objList, aId, &aObj)) continue;
 		oskn_Collider aCol = aObj->collider;
 
 		for (int j = i + 1, jCount = objList->activeIdListCount; j < jCount; ++j) {
 			oskn_ObjId bId = objList->activeIdList[j];
-			oskn_Obj* bObj = oskn_ObjList_getById(objList, bId);
+			oskn_Obj* bObj = NULL;
+			if (!oskn_ObjList_getById(objList, bId, &bObj)) continue;
 			if (!oskn_Obj_isNeedHitTest(aObj, bObj)) continue;
 
 			oskn_Vec2 aPos = aObj->transform.position;
@@ -1347,11 +1354,11 @@ void oskn_App_updateObj(oskn_App* self) {
 			//oskn_Obj aObjTemp = *aObj;
 			oskn_Vec2 hitPos = { 0 };
 			bool isTrigger = aObj->rigidbody.isTrigger || bObj->rigidbody.isTrigger;
-			oskn_Obj* prevAObj;
+			oskn_Obj* prevAObj = NULL;
 			if (!oskn_ObjList_tryGetById(&app_g.prevObjList, aObj->id, &prevAObj)) {
 				prevAObj = aObj;
 			}
-			oskn_Obj* prevBObj;
+			oskn_Obj* prevBObj = NULL;
 			if (!oskn_ObjList_tryGetById(&app_g.prevObjList, bObj->id, &prevBObj)) {
 				prevBObj = bObj;
 			}
@@ -1395,7 +1402,8 @@ void oskn_App_updateObj(oskn_App* self) {
 		// 位置補正、反射ベクトルの反映.
 		for (int i = 0, iCount = objList->activeIdListCount; i < iCount; ++i) {
 			oskn_ObjId aId = objList->activeIdList[i];
-			oskn_Obj* aObj = oskn_ObjList_getById(objList, aId);
+			oskn_Obj* aObj = NULL;
+			if (!oskn_ObjList_getById(objList, aId, &aObj)) continue;
 			if (aObj->rigidbody.hitCount <= 0) continue;
 			aObj->transform.position = aObj->rigidbody.nextPosition;
 			aObj->rigidbody.velocity = aObj->rigidbody.nextVelocity;
@@ -1405,8 +1413,10 @@ void oskn_App_updateObj(oskn_App* self) {
 
 		for (int i = 0, iCount = self->hitInfoList.count; i < iCount; ++i) {
 			oskn_ObjHitInfo h = oskn_ObjHitInfoList_get(&self->hitInfoList, i);
-			oskn_Obj* aObj = oskn_ObjList_getById(objList, h.aId);
-			oskn_Obj* bObj = oskn_ObjList_getById(objList, h.bId);
+			oskn_Obj* aObj = NULL;
+			if (!oskn_ObjList_getById(objList, h.aId, &aObj)) continue;
+			oskn_Obj* bObj = NULL;
+			if (!oskn_ObjList_getById(objList, h.bId, &bObj)) continue;
 			oskn_App_onHitObj(self, aObj, bObj, h.hitPosition);
 			oskn_App_onHitObj(self, bObj, aObj, h.hitPosition);
 		}
@@ -1415,7 +1425,8 @@ void oskn_App_updateObj(oskn_App* self) {
 	// areaRect 衝突判定.
 	for (int i = 0, iCount = objList->activeIdListCount; i < iCount; ++i) {
 		oskn_ObjId id = objList->activeIdList[i];
-		oskn_Obj* obj = oskn_ObjList_getById(objList, id);
+		oskn_Obj* obj = NULL;
+		if (!oskn_ObjList_getById(objList, id, &obj)) continue;
 
 		switch (obj->type) {
 		case oskn_ObjType_Camera: {
@@ -1462,7 +1473,8 @@ void oskn_App_updateObj(oskn_App* self) {
 
 	for (int i = objList->activeIdListCount - 1; 0 <= i; --i) {
 		oskn_ObjId id = objList->activeIdList[i];
-		oskn_Obj* obj = oskn_ObjList_getById(objList, id);
+		oskn_Obj* obj = NULL;
+		if (!oskn_ObjList_getById(objList, id, &obj)) continue;
 		if (obj->destroyTime < app_g.time.time) continue;
 		oskn_ObjList_removeById(objList, id);
 	}
@@ -1612,7 +1624,8 @@ void oskn_App_update(oskn_App* self) {
 					INT32 enemyCount = 0;
 					for (int i = 0, iCount = self->objList.activeIdListCount; i < iCount; ++i) {
 						oskn_ObjId objId = self->objList.activeIdList[i];
-						oskn_Obj* obj = oskn_ObjList_getById(&self->objList, objId);
+						oskn_Obj* obj = NULL;
+						if (!oskn_ObjList_getById(&self->objList, objId, &obj)) continue;
 						if (obj->type != oskn_ObjType_Enemy) continue;
 						++enemyCount;
 					}
@@ -1623,7 +1636,8 @@ void oskn_App_update(oskn_App* self) {
 			}
 			// ゲームオーバー判定.
 			{
-				oskn_Obj* player = oskn_ObjList_getById(&self->objList, self->playerId);
+				oskn_Obj* player = NULL;
+				if (!oskn_ObjList_getById(&self->objList, self->playerId, &player)) break;
 				if (player->player.hp <= 0.0f) {
 					nextState = oskn_AppState_Over;
 				}
@@ -1632,7 +1646,8 @@ void oskn_App_update(oskn_App* self) {
 		}
 		case oskn_AppState_Over: {
 			if (isEnter) {
-				oskn_Obj* player = oskn_ObjList_getById(&self->objList, self->playerId);
+				oskn_Obj* player = NULL;
+				if (!oskn_ObjList_getById(&self->objList, self->playerId, &player)) break;
 				oskn_ObjList_requestRemoveById(&app_g.objList, player->id, 0.0f);
 			}
 			if (0.5f <= stateTime) {
@@ -1696,7 +1711,8 @@ void draw(HWND hWnd) {
 	// カメラの数だけオブジェクトを描画する. 1 台しかないけど.
 	for (int camI = 0, camICount = app_g.objList.activeIdListCount; camI < camICount; ++camI) {
 		oskn_ObjId id = app_g.objList.activeIdList[camI];
-		oskn_Obj* camera = oskn_ObjList_getById(&app_g.objList, id);
+		oskn_Obj* camera = NULL;
+		if (!oskn_ObjList_getById(&app_g.objList, id, &camera)) continue;
 		if (camera->type != oskn_ObjType_Camera) continue;
 		oskn_Vec2 cameraOffset = oskn_Vec2Util_mulF(oskn_Vec2Util_addVec2(camera->transform.position, oskn_Vec2Util_mulF(app_g.screenSize, -0.5f)), -1.0f);
 
@@ -1716,7 +1732,8 @@ void draw(HWND hWnd) {
 
 		for (int i = 0, iCount = app_g.objList.activeIdListCount; i < iCount; ++i) {
 			oskn_ObjId id = app_g.objList.activeIdList[i];
-			oskn_Obj* obj = oskn_ObjList_getById(&app_g.objList, id);
+			oskn_Obj* obj = NULL;
+			if (!oskn_ObjList_getById(&app_g.objList, id, &obj)) continue;
 			POINT pt;
 			pt.x = (int)(obj->transform.position.x + cameraOffset.x);
 			pt.y = (int)(obj->transform.position.y + cameraOffset.y);
@@ -1828,8 +1845,8 @@ void draw(HWND hWnd) {
 	}
 
 	{
-		oskn_Obj* player = oskn_ObjList_getById(&app_g.objList, app_g.playerId);
-		if (NULL != player && 0 < player->player.hp) {
+		oskn_Obj* player = NULL;
+		if (oskn_ObjList_tryGetById(&app_g.objList, app_g.playerId, &player) && 0 < player->player.hp) {
 			float fuelRest = player->player.shotFuelRest;
 			// [        ]
 			// [::::    ]
