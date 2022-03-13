@@ -210,6 +210,10 @@ typedef struct _oskn_App {
 	oskn_Input input;
 	INT32 enemyAddCountMax;
 	INT32 enemyAddCount;
+	UINT32 scoreBest;
+	UINT32 score;
+	float ruleTime;
+	float ruleTimeLimit;
 
 	oskn_AppState appState;
 	float appStateStartTime;
@@ -221,7 +225,7 @@ typedef struct _oskn_App {
 
 /// <summary>衝突検証モード. ステージを狭める. 岩の配置を固定.</summary>
 bool OSKN_COL_TEST_ENABLED = false;
-bool OSKN_PLAYER_INVISIBLE_ENABLED = true;
+bool OSKN_PLAYER_INVISIBLE_ENABLED = false;
 bool OSKN_COL_POS_ADJUST_DELAY_ENABLED = false;
 /// <summary>衝突時に位置を補正する.</summary>
 bool OSKN_COL_POS_ADJUST_ENABLED = true;
@@ -239,6 +243,14 @@ oskn_App app_g = { 0 };
 
 float oskn_Math_abs(float v) {
 	return (v < 0) ? -v : v;
+}
+
+float oskn_Math_min(float a, float b) {
+	return (a < b) ? a : b;
+}
+
+float oskn_Math_max(float a, float b) {
+	return (a < b) ? b : a;
 }
 
 float oskn_Math_clamp(float v, float vMin, float vMax) {
@@ -990,6 +1002,8 @@ bool oskn_App_init(oskn_App* self, HWND hWnd) {
 	self->screenSize.y = 240;
 	self->fps = 60.0f;
 	self->frameInterval = 1.0f / self->fps;
+	self->ruleTimeLimit = 60.0f;
+
 	if (OSKN_COL_TEST_ENABLED) {
 		self->areaRect.x = 0;
 		self->areaRect.y = 0;
@@ -1011,6 +1025,25 @@ bool oskn_App_init(oskn_App* self, HWND hWnd) {
 
 	self->appState = oskn_AppState_None;
 	return true;
+}
+
+void oskn_App_addScore(oskn_App* self, UINT32 score) {
+	self->score += score;
+	if (self->scoreBest < self->score) {
+		self->scoreBest = self->score;
+	}
+}
+
+bool oskn_App_tryGetPlayerInput(oskn_App* self, oskn_Input** input) {
+	switch (self->appState) {
+	case oskn_AppState_Title:
+	case oskn_AppState_Ready:
+	case oskn_AppState_Main:
+		*input = &self->input;
+		return true;
+	default:
+		return false;
+	}
 }
 
 void oskn_App_onHitObj(oskn_App* self, oskn_Obj* aObj, const oskn_Obj* bObj, oskn_Vec2 hitPos) {
@@ -1066,8 +1099,12 @@ void oskn_App_onHitObj(oskn_App* self, oskn_Obj* aObj, const oskn_Obj* bObj, osk
 		if (bObj->type == oskn_ObjType_Enemy) {
 		} else if (bObj->type == oskn_ObjType_PlayerBullet) {
 			aObj->enemy.hp -= bObj->bullet.damage;
+			{
+				UINT32 score = 10;
+				oskn_App_addScore(&app_g, score);
+			}
 			if (0 < aObj->enemy.hp) {
-				oskn_Vec2 v = oskn_Vec2Util_mulF(bObj->rigidbody.velocity, 0.005f);
+				oskn_Vec2 v = oskn_Vec2Util_mulF(bObj->rigidbody.velocity, 0.01f);
 				aObj->rigidbody.velocity = oskn_Vec2Util_addVec2(aObj->rigidbody.velocity, v);
 			} else {
 				if (1 < aObj->enemy.lv) {
@@ -1079,6 +1116,8 @@ void oskn_App_onHitObj(oskn_App* self, oskn_Obj* aObj, const oskn_Obj* bObj, osk
 						oskn_App_createEnemy(&app_g, pos, aObj->enemy.lv - 1);
 					}
 				}
+				UINT32 score = aObj->enemy.lv * aObj->enemy.lv * 200;
+				oskn_App_addScore(&app_g, score);
 
 				oskn_ObjList_requestRemoveById(&app_g.objList, aObj->id, 0.0f);
 			}
@@ -1157,13 +1196,22 @@ void oskn_App_updateObj(oskn_App* self) {
 			break;
 		}
 		case oskn_ObjType_Player: {
-			oskn_Vec2 inputDir = oskn_Input_getDirection(&app_g.input);
+			bool hasKeyShot = false;
+			bool hasKeyFix = false;
+			oskn_Vec2 inputDir = oskn_Vec2Util_create(0.0f, 0.0f);
+			{
+				oskn_Input* input = NULL;
+				if (oskn_App_tryGetPlayerInput(&app_g, &input)) {
+					inputDir = oskn_Input_getDirection(input);
+					hasKeyShot = oskn_Input_hasKey(input, OSKN_KEY_SHOT);
+					hasKeyFix = oskn_Input_hasKey(input, OSKN_KEY_FIX);
+				}
+			}
 
 			// shot 処理.
-			// update 中に追加された Obj はそのフレーム中に update を回すか否か...
 			{
 
-				if (oskn_Input_hasKey(&app_g.input, OSKN_KEY_SHOT)) {
+				if (hasKeyShot) {
 					if (obj->player.shotStartTime <= 0.0f) {
 						obj->player.shotStartTime = app_g.time.time;
 					}
@@ -1239,7 +1287,7 @@ void oskn_App_updateObj(oskn_App* self) {
 					pos.y = rectMax.y - obj->collider.radius;
 				}
 
-				if (!oskn_Input_hasKey(&app_g.input, OSKN_KEY_FIX)) {
+				if (!hasKeyFix) {
 					obj->transform.rotation = oskn_Vec2_toAngle(move);
 				}
 				obj->transform.position = pos;
@@ -1618,6 +1666,17 @@ void oskn_App_update(oskn_App* self) {
 
 				oskn_App_createCamera(self);
 				oskn_App_createPlayer(self);
+
+				{
+					oskn_Obj* camera = NULL;
+					oskn_Obj* player = NULL;
+					if (oskn_ObjList_getById(&app_g.objList, app_g.playerId, &player) &&
+						oskn_ObjList_getById(&app_g.objList, app_g.cameraId, &camera)) {
+						camera->transform.position = player->transform.position;
+					}
+				}
+
+				nextState = oskn_AppState_Title;
 			}
 
 			if (0.5f <= stateTime) {
@@ -1632,9 +1691,20 @@ void oskn_App_update(oskn_App* self) {
 				oskn_ObjList_clear(&self->objList);
 				app_g.enemyAddCount = 0;
 				app_g.enemyAddCountMax = 2;
+				app_g.ruleTime = 0.0f;
+				app_g.score = 0;
 
 				oskn_App_createCamera(self);
 				oskn_App_createPlayer(self);
+
+				{
+					oskn_Obj* camera = NULL;
+					oskn_Obj* player = NULL;
+					if (oskn_ObjList_getById(&app_g.objList, app_g.playerId, &player) &&
+						oskn_ObjList_getById(&app_g.objList, app_g.cameraId, &camera)) {
+						camera->transform.position = player->transform.position;
+					}
+				}
 			}
 
 			if (1.0f <= stateTime) {
@@ -1659,11 +1729,19 @@ void oskn_App_update(oskn_App* self) {
 					}
 				}
 			}
-			// ゲームオーバー判定.
+			// 死亡判定.
 			{
 				oskn_Obj* player = NULL;
 				if (!oskn_ObjList_getById(&self->objList, self->playerId, &player)) break;
 				if (player->player.hp <= 0.0f) {
+					nextState = oskn_AppState_Over;
+				}
+			}
+			// タイムオーバー判定.
+			{
+				self->ruleTime += self->time.deltaTime;
+				if (self->ruleTimeLimit <= self->ruleTime) {
+					self->ruleTime = self->ruleTimeLimit;
 					nextState = oskn_AppState_Over;
 				}
 			}
@@ -1672,15 +1750,16 @@ void oskn_App_update(oskn_App* self) {
 		case oskn_AppState_Over: {
 			if (isEnter) {
 				oskn_Obj* player = NULL;
-				if (!oskn_ObjList_getById(&self->objList, self->playerId, &player)) break;
-				oskn_ObjList_requestRemoveById(&app_g.objList, player->id, 0.0f);
+				if (oskn_ObjList_getById(&self->objList, self->playerId, &player) && player->player.hp <= 0) {
+					oskn_ObjList_requestRemoveById(&app_g.objList, player->id, 0.0f);
+				}
 			}
 			if (0.5f <= stateTime) {
 				if (oskn_Input_hasKeyDown(&self->input, OSKN_KEY_START)) {
 					nextState = oskn_AppState_Title;
 				}
 			}
-			if (3.0f <= stateTime) {
+			if (10.0f <= stateTime) {
 				nextState = oskn_AppState_Title;
 			}
 			break;
@@ -1691,7 +1770,7 @@ void oskn_App_update(oskn_App* self) {
 					nextState = oskn_AppState_Title;
 				}
 			}
-			if (3.0f <= stateTime) {
+			if (10.0f <= stateTime) {
 				nextState = oskn_AppState_Title;
 			}
 			break;
@@ -1888,24 +1967,53 @@ void draw(HWND hWnd) {
 				PTCHAR c = (fuelRest < a) ?
 					TEXT(" ") :
 					(fuelRest < b) ?
-						TEXT(":") :
-						TEXT("#");
+					TEXT(":") :
+					TEXT("#");
 				lstrcat(gaugeStr, c);
 			}
 			wsprintf(str, TEXT("FUEL %3d [%s]"), (int)fuelRest, gaugeStr);
 
-//			wsprintf(str, TEXT("FUEL %d"), (int)fuelRest);
+			//			wsprintf(str, TEXT("FUEL %d"), (int)fuelRest);
 			GetTextExtentPoint32(hdc, str, lstrlen(str), &textSize);
 			textX = (INT32)(app_g.screenSize.x * 0.5f);
-			textY = (INT32)(8.0f);
+			textY = (INT32)(32.0f);
 
 			TextOut(hdc, textX, textY, str, lstrlen(str));
-
 		}
-
-		wsprintf(str, TEXT("F %d T %d"), app_g.time.frameCount, (int)(app_g.time.time * 100));
-		TextOut(hdc, 8, 10, str, lstrlen(str));
 	}
+	{
+		wsprintf(str, TEXT("SCORE %d"), app_g.score);
+		GetTextExtentPoint32(hdc, str, lstrlen(str), &textSize);
+		textX = 8;
+		textY = 8;
+		TextOut(hdc, textX, textY, str, lstrlen(str));
+
+		wsprintf(str, TEXT("HISCORE %d"), app_g.scoreBest);
+		GetTextExtentPoint32(hdc, str, lstrlen(str), &textSize);
+		textX = (INT32)(app_g.screenSize.x * 0.5f) + 8;
+		textY = 8;
+		TextOut(hdc, textX, textY, str, lstrlen(str));
+
+		bool isIngame =
+			(app_g.appState == oskn_AppState_Ready) ||
+			(app_g.appState == oskn_AppState_Main) ||
+			(app_g.appState == oskn_AppState_Clear) ||
+			(app_g.appState == oskn_AppState_Over)
+			;
+
+		if (isIngame) {
+			UINT32 restSec = (UINT32)(oskn_Math_max(0, app_g.ruleTimeLimit - app_g.ruleTime));
+			wsprintf(str, TEXT("TIME %d"), restSec);
+			GetTextExtentPoint32(hdc, str, lstrlen(str), &textSize);
+			textX = 8;
+			textY = (INT32)(32.0f);
+			TextOut(hdc, textX, textY, str, lstrlen(str));
+		}
+	}
+	//{
+	//	wsprintf(str, TEXT("F %d T %d"), app_g.time.frameCount, (int)(app_g.time.time * 100));
+	//	TextOut(hdc, 8, 10, str, lstrlen(str));
+	//}
 
 	SelectObject(hdc, GetStockObject(SYSTEM_FONT));
 	DeleteObject(hFont);
