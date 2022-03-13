@@ -1530,34 +1530,62 @@ void oskn_App_updateEnemySpawn(oskn_App* self) {
 	}
 
 	if (app_g.enemyAddCountMax <= app_g.enemyAddCount) return;
-	float spawnInterval = 2.0f;
-	INT32 prevSec = (INT32)((self->time.time - self->frameInterval) / spawnInterval);
-	INT32 sec = (INT32)(self->time.time / spawnInterval);
 
-
-	if (1.0f < self->time.time && (prevSec < sec)) {
-		// spawn
-		oskn_Vec2 pos = { 0 };
-		int n = 4 * rand() / RAND_MAX;
-		oskn_Vec2 rectMin = oskn_Rect_min(self->areaRect);
-		oskn_Vec2 rectMax = oskn_Rect_max(self->areaRect);
-		switch (n) {
-		case 0:
-		case 1:
-			pos.x = (n == 0) ? rectMin.x : rectMax.x;
-			pos.y = self->areaRect.y + self->areaRect.height * rand() / RAND_MAX;
-			break;
-		case 2:
-		case 3:
-		default:
-			pos.x = self->areaRect.x + self->areaRect.width * rand() / RAND_MAX;
-			pos.y = (n == 2) ? rectMin.y : rectMax.y;
-			break;
+	if (true) {
+		static float dataSpawnList[] = {
+			-200, -100, 4,
+			 200, -100, 3,
+			 200, 100, 3,
+			-100, -50, 2,
+			  50,-100, 2,
+			  50, 100, 2,
+			-100,  50, 2,
+			 150, 150, 1,
+			 200, 150, 1,
+			 200, 200, 1,
+			 150, 200, 1,
+		};
+		int dataSpawnListSize = sizeof(dataSpawnList) / sizeof(*dataSpawnList);
+		for (int i = 0; i < dataSpawnListSize; i += 3) {
+			float x = dataSpawnList[i + 0];
+			float y = dataSpawnList[i + 1];
+			int lv = (int)dataSpawnList[i + 2];
+			oskn_Vec2 pos = oskn_Vec2Util_create(x, y);
+			pos = oskn_Vec2Util_addVec2(pos, oskn_Rect_center(app_g.areaRect));
+			oskn_App_createEnemy(&app_g, pos, lv);
+			++app_g.enemyAddCount;
 		}
+	}
+	else {
+		float spawnInterval = 2.0f;
+		INT32 prevSec = (INT32)((self->time.time - self->frameInterval) / spawnInterval);
+		INT32 sec = (INT32)(self->time.time / spawnInterval);
 
-		oskn_App_createEnemy(&app_g, pos, 4);
 
-		++app_g.enemyAddCount;
+		if (1.0f < self->time.time && (prevSec < sec)) {
+			// spawn
+			oskn_Vec2 pos = { 0 };
+			int n = 4 * rand() / RAND_MAX;
+			oskn_Vec2 rectMin = oskn_Rect_min(self->areaRect);
+			oskn_Vec2 rectMax = oskn_Rect_max(self->areaRect);
+			switch (n) {
+			case 0:
+			case 1:
+				pos.x = (n == 0) ? rectMin.x : rectMax.x;
+				pos.y = self->areaRect.y + self->areaRect.height * rand() / RAND_MAX;
+				break;
+			case 2:
+			case 3:
+			default:
+				pos.x = self->areaRect.x + self->areaRect.width * rand() / RAND_MAX;
+				pos.y = (n == 2) ? rectMin.y : rectMax.y;
+				break;
+			}
+
+			oskn_App_createEnemy(&app_g, pos, 4);
+
+			++app_g.enemyAddCount;
+		}
 	}
 }
 
