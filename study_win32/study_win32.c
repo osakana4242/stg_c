@@ -132,6 +132,8 @@ typedef struct _oskn_Bullet {
 	UINT8 lv;
 	float damage;
 	float speed;
+	float movedDistance;
+	float movableDistance;
 } oskn_Bullet;
 
 typedef struct _oskn_Enemy {
@@ -193,8 +195,12 @@ typedef enum _oskn_AppState {
 
 typedef struct _oskn_App {
 	oskn_ObjList objList;
-	/// <summary>1フレーム前の状態をまるっと保存</summary>
-	oskn_ObjList prevObjList;
+	// objList のバックアップ0
+	oskn_ObjList objListBackup0;
+	// objList のバックアップ1
+	oskn_ObjList objListBackup1;
+	// 最後に書き込んだ objListBackup のインデックス
+	UINT8 lastObjListBackupIndex;
 
 	oskn_ObjHitInfoList hitInfoList;
 
@@ -1103,7 +1109,8 @@ bool oskn_App_init(oskn_App* self, HWND hWnd) {
 	oskn_App_test(self);
 
 	oskn_ObjList_init(&self->objList, 255);
-	oskn_ObjList_init(&self->prevObjList, self->objList.capacity);
+	oskn_ObjList_init(&self->objListBackup0, self->objList.capacity);
+	oskn_ObjList_init(&self->objListBackup1, self->objList.capacity);
 	oskn_ObjHitInfoList_init(&self->hitInfoList, 255);
 	self->screenSize.x = OSKN_SCR_SIZE_X;
 	self->screenSize.y = OSKN_SCR_SIZE_Y;
@@ -1234,8 +1241,31 @@ void oskn_App_onHitObj(oskn_App* self, oskn_Obj* aObj, const oskn_Obj* bObj, osk
 	}
 }
 
+// objList の保存.
+void oskn_App_pushObjListBackup(oskn_App* self) {
+	self->lastObjListBackupIndex = ((self->lastObjListBackupIndex + 1) & 0x1);
+	oskn_ObjList* src = &self->objList;
+	oskn_ObjList* dest = (self->lastObjListBackupIndex == 0) ?
+		&self->objListBackup0 :
+		&self->objListBackup1;
+
+	oskn_ObjList_copyFrom(dest, src);
+}
+
+// objList の過去の状態を取得する.
+// index:
+//   0: 現在のフレームの開始時点
+//   1: 1フレーム前の開始時点
+oskn_ObjList* oskn_App_getPrevObjList(oskn_App* self, INT32 index) {
+	INT32 index2 = ((self->lastObjListBackupIndex - index) & 0x1);
+	return (index2 == 0) ?
+		&self->objListBackup0:
+		&self->objListBackup1;
+}
+
 /// <summary>更新, 移動, 衝突判定</summary>
 void oskn_App_updateObj(oskn_App* self) {
+	oskn_App_pushObjListBackup(self);
 	oskn_ObjList* objList = &self->objList;
 
 	for (int i = 0, iCount = objList->activeIdListCount; i < iCount; ++i) {
@@ -1382,6 +1412,8 @@ void oskn_App_updateObj(oskn_App* self) {
 							bullet->bullet.lv = shotLv;
 							bullet->bullet.damage = 1.0f;
 							bullet->bullet.speed = 400.0f;
+							bullet->bullet.movedDistance = 0.0f;
+							bullet->bullet.movableDistance = min(OSKN_SCR_SIZE_X, OSKN_SCR_SIZE_Y) * 0.8f + 32;
 							bullet->collider.radius = 8.0f;
 							bullet->transform.position = obj->transform.position;
 							bullet->transform.rotation = obj->transform.rotation;
@@ -1428,12 +1460,22 @@ void oskn_App_updateObj(oskn_App* self) {
 			break;
 		}
 		case oskn_ObjType_PlayerBullet: {
-			obj->rigidbody.velocity = oskn_Vec2Util_mulF(oskn_Vec2Util_fromAngle(obj->transform.rotation), 400.0f);
+			oskn_Obj* prevObj = NULL;
+			if (!oskn_ObjList_tryGetById(oskn_App_getPrevObjList(self, 1), obj->id, &prevObj)) {
+				prevObj = obj;
+			}
 			oskn_Vec2 pos = obj->transform.position;
+			oskn_Vec2 prevPos = prevObj->transform.position;
+			float movedDistance = oskn_Vec2_magnitude(
+				oskn_Vec2_cycleSigned(oskn_Vec2Util_subVec2(pos, prevPos), oskn_Rect_size(app_g.areaRect))
+			);
+			obj->bullet.movedDistance += movedDistance;
+
+			obj->rigidbody.velocity = oskn_Vec2Util_mulF(oskn_Vec2Util_fromAngle(obj->transform.rotation), 400.0f);
 			oskn_Vec2 rectMin = oskn_Rect_min(app_g.areaRect);
 			oskn_Vec2 rectMax = oskn_Rect_max(app_g.areaRect);
 			const float duration = 0.75f;
-			if (obj->spawnedTime + duration < app_g.time.time) {
+			if (obj->bullet.movableDistance < obj->bullet.movedDistance) {
 				oskn_ObjList_requestRemoveById(objList, id, 0.0f);
 			}
 			break;
@@ -1493,6 +1535,7 @@ void oskn_App_updateObj(oskn_App* self) {
 
 	// 衝突判定.
 	oskn_ObjHitInfoList_clear(&self->hitInfoList);
+	oskn_ObjList* prev0ObjList = oskn_App_getPrevObjList(self, 0);
 	for (int i = 0, iCount = objList->activeIdListCount; i < iCount; ++i) {
 		oskn_ObjId aId = objList->activeIdList[i];
 		oskn_Obj* aObj = NULL;
@@ -1519,11 +1562,11 @@ void oskn_App_updateObj(oskn_App* self) {
 			oskn_Vec2 hitPos = { 0 };
 			bool isTrigger = aObj->rigidbody.isTrigger || bObj->rigidbody.isTrigger;
 			oskn_Obj* prevAObj = NULL;
-			if (!oskn_ObjList_tryGetById(&app_g.prevObjList, aObj->id, &prevAObj)) {
+			if (!oskn_ObjList_tryGetById(prev0ObjList, aObj->id, &prevAObj)) {
 				prevAObj = aObj;
 			}
 			oskn_Obj* prevBObj = NULL;
-			if (!oskn_ObjList_tryGetById(&app_g.prevObjList, bObj->id, &prevBObj)) {
+			if (!oskn_ObjList_tryGetById(prev0ObjList, bObj->id, &prevBObj)) {
 				prevBObj = bObj;
 			}
 			oskn_HitInfo hitInfo = { 0 };
@@ -1664,8 +1707,6 @@ void oskn_App_updateObj(oskn_App* self) {
 		if (obj->destroyTime < app_g.time.time) continue;
 		oskn_ObjList_removeById(objList, id);
 	}
-
-	oskn_ObjList_copyFrom(&self->prevObjList, &self->objList);
 }
 
 void oskn_App_createCamera(oskn_App* self) {
