@@ -1,0 +1,21 @@
+[package]
+name = "study_rust"
+version = "0.1.0"
+edition = "2021"
+authors = ["osakana4242"]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+
+# from: https://github.com/microsoft/windows-rs/blob/0.43.0/crates/samples/create_window/Cargo.toml
+# from: https://crates.io/crates/windows
+[dependencies.windows]
+# path = "../../libs/windows" # これはいらない
+version = "0.43.0"
+features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_System_LibraryLoader",
+    "Win32_UI_WindowsAndMessaging",
+]
