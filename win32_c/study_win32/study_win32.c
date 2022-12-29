@@ -2336,34 +2336,48 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	ShowWindow(hWnd, nCmdShow);
 
 	float totalTime = 0;
-	UINT64 prevTime = GetTickCount64();
+
+	LARGE_INTEGER tickUnit;
+	if (!QueryPerformanceFrequency(&tickUnit)) {
+		MessageBox(NULL, TEXT("QueryPerformanceFrequency の実行に失敗"), NULL, MB_ICONERROR);
+		return 0;
+	}
+
+	LARGE_INTEGER prevTick;
+	if (!QueryPerformanceCounter(&prevTick)) {
+		MessageBox(NULL, TEXT("QueryPerformanceCounter の実行に失敗"), NULL, MB_ICONERROR);
+		return 0;
+	}
+
 	while (true) {
 		MSG msg;
-		int result = PeekMessage(&msg, NULL, 0, 0, PM_NOREMOVE);
+		int result = PeekMessage(&msg, NULL, 0, 0, PM_REMOVE);
 		if (result) {
-			result = GetMessage(&msg, NULL, 0, 0);
-			bool hasError = result == -1;
-			if (hasError) {
-				MessageBox(NULL, TEXT("メッセージの取得に失敗"), NULL, MB_ICONERROR);
-				return 0;
-			}
 			bool isQuit = msg.message == WM_QUIT;
 			if (isQuit) {
 				return (int)msg.wParam;
 			}
+			TranslateMessage(&msg);
 			DispatchMessage(&msg);
-		}
-		else {
-			UINT64 time = GetTickCount64();
-			float deltaTime = (INT32)(time - prevTime) * 0.001f;
-			if (0.1f < deltaTime) {
+		} else {
+			LARGE_INTEGER tick;
+			if (!QueryPerformanceCounter(&tick)) {
+				MessageBox(NULL, TEXT("QueryPerformanceCounter の実行に失敗"), NULL, MB_ICONERROR);
+				return 0;
+			}
+			double deltaTick = (double)(tick.QuadPart - prevTick.QuadPart);
+			float deltaTime = (float)(deltaTick / tickUnit.QuadPart);
+			if (deltaTime < 0.0f) {
+				// 異常. 時間の巻き戻り.
+				deltaTime = app_g.frameInterval;
+			} else if (0.1f < deltaTime) {
 				// 差分がありすぎるときはブレークポイントかけてるときとみなす.
 				deltaTime = app_g.frameInterval;
 			}
 			totalTime += deltaTime;
-			prevTime = time;
+			prevTick = tick;
 			if (totalTime < app_g.frameInterval) {
-
+				Sleep(0);
 			}
 			else {
 				totalTime -= app_g.frameInterval;
